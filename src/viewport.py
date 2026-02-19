@@ -1,4 +1,4 @@
-"""CarWash-2 Storm Viewport -- Phase 0, Sprint 3.
+"""CarWash-2 Storm Viewport -- Phase 0, Sprint 4.
 
 Renders a USD stage in a Qt window via OpenGL with:
 - Blinn-Phong shaded geometry (cube + ground or loaded USD meshes)
@@ -8,6 +8,10 @@ Renders a USD stage in a Qt window via OpenGL with:
 - LOAD3D_CAMERA JSON export (L key)
 - Physical camera presets (0-4 keys)
 - DCC-standard orbit/pan/dolly controls
+- Wireframe / shading modes (W key)
+- Drag-and-drop USD/GLB file loading
+- ComfyUI WebSocket bridge (B key)
+- USD material color extraction
 
 Usage:
     python src/viewport.py                    # Default cube scene
@@ -20,6 +24,7 @@ Requires Python 3.12 venv with: usd-core, PySide6, PyOpenGL, numpy
 import ctypes
 import json
 import math
+import os
 import sys
 import time
 
@@ -82,9 +87,12 @@ from PySide6.QtWidgets import QApplication, QMainWindow
 
 from aov_renderer import AOVRenderer
 from camera import OrbitCamera
+from comfy_bridge import ComfyBridge
+from file_drop import FileDropHandler, FileDropOverlay
 from grid import GridRenderer
 from hud import HUD
 from projection import preset_from_database
+from shading import ShadingManager, ShadingMode
 from stage_builder import create_default_stage, get_cube_vertices
 from usd_loader import extract_meshes, load_usd_file
 
@@ -122,24 +130,26 @@ in vec3 vFragPos;
 uniform vec3 uLightDir;
 uniform vec3 uBaseColor;
 uniform vec3 uViewPos;
+uniform float uAmbientOverride;
 
 out vec4 FragColor;
 
 void main() {
     vec3 norm = normalize(vNormal);
 
-    // Ambient
-    float ambient = 0.15;
+    // Ambient (overridable for unlit mode)
+    float ambient = max(0.15, uAmbientOverride);
 
-    // Diffuse (key light)
+    // Diffuse (key light) -- zeroed when ambient >= 1.0 (unlit)
     float diff = max(dot(norm, normalize(uLightDir)), 0.0);
+    float diffuse_strength = (ambient >= 1.0) ? 0.0 : 0.75;
 
-    // Specular (Blinn-Phong)
+    // Specular (Blinn-Phong) -- zeroed in unlit mode
     vec3 viewDir = normalize(uViewPos - vFragPos);
     vec3 halfDir = normalize(normalize(uLightDir) + viewDir);
-    float spec = pow(max(dot(norm, halfDir), 0.0), 32.0) * 0.3;
+    float spec = (ambient >= 1.0) ? 0.0 : pow(max(dot(norm, halfDir), 0.0), 32.0) * 0.3;
 
-    vec3 result = uBaseColor * (ambient + diff * 0.75) + vec3(spec);
+    vec3 result = uBaseColor * (ambient + diff * diffuse_strength) + vec3(spec);
     FragColor = vec4(result, 1.0);
 }
 """
@@ -191,14 +201,6 @@ def scale_matrix(sx: float, sy: float, sz: float) -> list[float]:
         0, 0, sz, 0,
         0, 0, 0, 1,
     ]
-
-
-IDENTITY_MATRIX = [
-    1, 0, 0, 0,
-    0, 1, 0, 0,
-    0, 0, 1, 0,
-    0, 0, 0, 1,
-]
 
 
 def mat4_multiply(a: list[float], b: list[float]) -> list[float]:
@@ -275,6 +277,17 @@ class StormViewport(QOpenGLWidget):
         self._grid = GridRenderer()
         self._hud = HUD()
         self._aov = AOVRenderer()
+        self._shading = ShadingManager()
+
+        # ComfyUI bridge
+        self._bridge = ComfyBridge()
+
+        # Drag-and-drop
+        FileDropHandler.setup_drop(self)
+        self._drop_overlay = FileDropOverlay()
+        self._drop_file = None
+        self._drag_valid = False
+        self._drag_filename = ""
 
         # FPS tracking
         self._frame_count = 0
@@ -352,12 +365,23 @@ class StormViewport(QOpenGLWidget):
                     mesh_data.vertices, mesh_data.normals, mesh_data.indices
                 )
                 self._draw_list.append(
-                    (vao, count, mesh_data.transform, (0.6, 0.6, 0.6))
+                    (vao, count, mesh_data.transform, mesh_data.color)
                 )
         except Exception as e:
             print(f"  Failed to load USD file: {e}")
             print("  Falling back to default scene.")
             self._load_default_geometry()
+
+    def _reload_scene(self, file_path: str):
+        """Reload the viewport with a new USD file (e.g. from drag-drop)."""
+        self.makeCurrent()
+        self._draw_list.clear()
+        self._usd_file = file_path
+        self._load_usd_geometry()
+        self.doneCurrent()
+        self._update_title()
+        self.update()
+        print(f"Scene reloaded: {file_path}")
 
     def set_usd_file(self, path: str):
         """Set USD file path to load on initialization."""
@@ -395,6 +419,10 @@ class StormViewport(QOpenGLWidget):
         glBindVertexArray(0)
         return vao, len(indices)
 
+    # ------------------------------------------------------------------
+    # Rendering
+    # ------------------------------------------------------------------
+
     def paintGL(self):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         if not self._initialized:
@@ -418,7 +446,11 @@ class StormViewport(QOpenGLWidget):
         # -- Draw grid (behind scene geometry) --
         self._grid.draw(view, proj)
 
-        # -- Draw scene geometry --
+        # -- Draw scene geometry with shading mode --
+        shading = self._shading
+        unlit = shading.get_unlit_overrides()
+        ambient_override = unlit.get("ambient", 0.0)
+
         glUseProgram(self._program)
 
         proj_loc = glGetUniformLocation(self._program, "uProjection")
@@ -427,32 +459,63 @@ class StormViewport(QOpenGLWidget):
         light_loc = glGetUniformLocation(self._program, "uLightDir")
         color_loc = glGetUniformLocation(self._program, "uBaseColor")
         viewpos_loc = glGetUniformLocation(self._program, "uViewPos")
+        ambient_loc = glGetUniformLocation(self._program, "uAmbientOverride")
 
         glUniformMatrix4fv(proj_loc, 1, False, (ctypes.c_float * 16)(*proj))
         glUniformMatrix4fv(view_loc, 1, False, (ctypes.c_float * 16)(*view))
-        glUniform3f(light_loc, 0.5, 0.8, 0.6)  # Key light direction
+        glUniform3f(light_loc, 0.5, 0.8, 0.6)
         glUniform3f(viewpos_loc, *cam.eye)
 
+        from OpenGL.GL import glUniform1f
+        glUniform1f(ambient_loc, ambient_override)
+
+        # Primary draw pass
+        shading.apply_pre_draw()
+        self._draw_scene(model_loc, color_loc)
+        shading.apply_post_draw()
+
+        # Wireframe overlay (second pass for WIREFRAME_ON_SHADED)
+        if shading.needs_second_pass:
+            shading.apply_wireframe_overlay_state()
+            glUniform1f(ambient_loc, 1.0)  # Unlit wireframe
+            wc = shading.wireframe_color
+            for vao, index_count, model, _color in self._draw_list:
+                glUniformMatrix4fv(model_loc, 1, False, (ctypes.c_float * 16)(*model))
+                glUniform3f(color_loc, *wc)
+                glBindVertexArray(vao)
+                glDrawElements(GL_TRIANGLES, index_count, GL_UNSIGNED_INT, None)
+            glBindVertexArray(0)
+            shading.restore_wireframe_overlay_state()
+
+        glUseProgram(0)
+
+        # -- QPainter overlays (HUD + drag feedback) --
+        painter = QPainter(self)
+        if self._hud.enabled:
+            camera_info = self._hud.build_camera_info(self._camera)
+            camera_info["shading"] = shading.mode_name
+            camera_info["bridge"] = self._bridge.status
+            self._hud.draw(painter, self._width, self._height, camera_info, self._fps)
+        if self._drag_filename:
+            self._drop_overlay.draw_drag_overlay(
+                painter, self._width, self._height,
+                self._drag_filename, self._drag_valid,
+            )
+        painter.end()
+
+        # Depth AOV verification -- deferred to allow framebuffer to settle
+        if not self._depth_verified:
+            self._depth_verified = True
+            QTimer.singleShot(500, self._deferred_depth_verify)
+
+    def _draw_scene(self, model_loc, color_loc):
+        """Draw all scene geometry (used by primary pass and AOV callbacks)."""
         for vao, index_count, model, color in self._draw_list:
             glUniformMatrix4fv(model_loc, 1, False, (ctypes.c_float * 16)(*model))
             glUniform3f(color_loc, *color)
             glBindVertexArray(vao)
             glDrawElements(GL_TRIANGLES, index_count, GL_UNSIGNED_INT, None)
-
         glBindVertexArray(0)
-        glUseProgram(0)
-
-        # -- Draw HUD overlay via QPainter --
-        if self._hud.enabled:
-            camera_info = self._hud.build_camera_info(self._camera)
-            painter = QPainter(self)
-            self._hud.draw(painter, self._width, self._height, camera_info, self._fps)
-            painter.end()
-
-        # Depth AOV verification -- deferred to allow framebuffer to settle
-        if not self._depth_verified:
-            self._depth_verified = True  # Set first to prevent re-entry
-            QTimer.singleShot(500, self._deferred_depth_verify)
 
     def _draw_scene_for_aov(self, program):
         """Callback for AOV renderer: draw all scene geometry with a given shader program."""
@@ -475,11 +538,14 @@ class StormViewport(QOpenGLWidget):
 
         glBindVertexArray(0)
 
+    # ------------------------------------------------------------------
+    # AOV + Camera export
+    # ------------------------------------------------------------------
+
     def _save_aovs(self):
         """Save depth + normal AOV passes to PNG files."""
         self.makeCurrent()
         try:
-            # Resize AOV FBO if viewport changed
             if self._aov.width != self._width or self._aov.height != self._height:
                 self._aov.setup(self._width, self._height)
 
@@ -507,6 +573,32 @@ class StormViewport(QOpenGLWidget):
         print(f"  Sensor: {self._camera.sensor_name} | Lens: {self._camera.lens_name}")
         print(f"  Position: {camera_dict['position']}")
         print(f"  Target: {camera_dict['target']}")
+
+    # ------------------------------------------------------------------
+    # ComfyUI bridge
+    # ------------------------------------------------------------------
+
+    def _toggle_bridge(self):
+        """Toggle the ComfyUI bridge connection."""
+        if self._bridge.is_connected:
+            self._bridge.disconnect()
+            print("ComfyUI bridge: disconnected")
+        else:
+            print("ComfyUI bridge: connecting...")
+            if self._bridge.connect():
+                print(f"ComfyUI bridge: {self._bridge.status}")
+            else:
+                print("ComfyUI bridge: ComfyUI not reachable (will retry on next send)")
+
+    def _send_camera_to_bridge(self):
+        """Send current camera state to ComfyUI if bridge is active."""
+        if self._bridge.is_connected:
+            camera_dict = self._camera.to_load3d_camera()
+            self._bridge.send_viewport_state(camera_dict, self._width, self._height)
+
+    # ------------------------------------------------------------------
+    # Depth verification
+    # ------------------------------------------------------------------
 
     def _deferred_depth_verify(self):
         """Trigger depth readback after framebuffer is fully rendered."""
@@ -550,6 +642,8 @@ class StormViewport(QOpenGLWidget):
 
     def mouseReleaseEvent(self, event):
         self._mouse_button = None
+        # Send camera to bridge after orbit/pan/dolly ends
+        self._send_camera_to_bridge()
         event.accept()
 
     def mouseMoveEvent(self, event):
@@ -580,8 +674,44 @@ class StormViewport(QOpenGLWidget):
     def wheelEvent(self, event):
         steps = event.angleDelta().y() / 120.0
         self._camera.dolly_scroll(steps)
+        self._send_camera_to_bridge()
         self.update()
         event.accept()
+
+    # ------------------------------------------------------------------
+    # Drag-and-drop
+    # ------------------------------------------------------------------
+
+    def dragEnterEvent(self, event):
+        path = FileDropHandler.validate_drop(event)
+        if path:
+            event.acceptProposedAction()
+            self._drop_file = path
+            self._drag_valid = True
+            self._drag_filename = os.path.basename(path)
+        else:
+            event.acceptProposedAction()
+            self._drag_valid = False
+            self._drag_filename = FileDropHandler.extract_filename(event) or ""
+        self.update()
+
+    def dragLeaveEvent(self, event):
+        self._drop_file = None
+        self._drag_valid = False
+        self._drag_filename = ""
+        self.update()
+
+    def dropEvent(self, event):
+        if self._drop_file:
+            self._reload_scene(self._drop_file)
+        self._drop_file = None
+        self._drag_valid = False
+        self._drag_filename = ""
+        self.update()
+
+    # ------------------------------------------------------------------
+    # Keyboard
+    # ------------------------------------------------------------------
 
     # Camera preset map: key -> (preset_id or None, label)
     _CAMERA_PRESETS = {
@@ -597,9 +727,17 @@ class StormViewport(QOpenGLWidget):
 
         if key == Qt.Key_F:
             self._camera.frame_scene()
+            self._send_camera_to_bridge()
             self.update()
         elif key == Qt.Key_H:
             self._hud.toggle()
+            self.update()
+        elif key == Qt.Key_W:
+            mode = self._shading.cycle()
+            print(f"Shading: {self._shading.mode_name}")
+            self.update()
+        elif key == Qt.Key_B:
+            self._toggle_bridge()
             self.update()
         elif key == Qt.Key_P:
             self._save_aovs()
@@ -617,6 +755,7 @@ class StormViewport(QOpenGLWidget):
                     print(f"Could not load preset: {e}")
                     return
             print(f"Camera: {label}  [{self._camera.sensor_name} | {self._camera.lens_name}]")
+            self._send_camera_to_bridge()
             self._update_title()
             self.update()
         event.accept()
@@ -690,6 +829,8 @@ def main():
     print("\nViewport open. Close the window to exit.")
     print("Controls: Alt+LMB=Orbit  Alt+MMB=Pan  Scroll=Zoom  F=Frame")
     print("          0-4=Camera Presets  H=Toggle HUD  P=Save AOVs  L=Export Camera")
+    print("          W=Cycle Shading  B=Toggle ComfyUI Bridge")
+    print("          Drag-drop USD/GLB/OBJ files to load")
     sys.exit(app.exec())
 
 

@@ -10,6 +10,12 @@ from dataclasses import dataclass, field
 
 from pxr import Gf, Usd, UsdGeom
 
+try:
+    from pxr import UsdShade, Sdf
+    _HAS_USD_SHADE = True
+except ImportError:
+    _HAS_USD_SHADE = False
+
 
 @dataclass
 class MeshData:
@@ -20,6 +26,7 @@ class MeshData:
     normals: list = field(default_factory=list)     # list of (nx, ny, nz) tuples
     indices: list = field(default_factory=list)     # flat list of triangle vertex indices
     transform: list = field(default_factory=list)   # 16-float column-major 4x4 matrix
+    color: tuple = (0.6, 0.6, 0.6)                 # RGB floats 0-1, default grey
 
 
 # ---------------------------------------------------------------------------
@@ -175,13 +182,98 @@ def _extract_single_mesh(
     world_xform = xform_cache.GetLocalToWorldTransform(prim)
     transform = _gf_matrix_to_list(world_xform)
 
+    # -- Color ------------------------------------------------------------
+    color = _extract_mesh_color(prim)
+
     return MeshData(
         name=str(prim.GetPath()),
         vertices=vertices,
         normals=normals,
         indices=triangles,
         transform=transform,
+        color=color,
     )
+
+
+_DEFAULT_COLOR = (0.6, 0.6, 0.6)
+
+
+def _extract_mesh_color(prim: Usd.Prim) -> tuple:
+    """Extract display color from primvar or material binding.
+
+    Resolution order:
+        1. ``primvars:displayColor`` on the mesh prim
+        2. Bound material's ``diffuseColor`` or ``baseColor`` shader input
+        3. Default grey ``(0.6, 0.6, 0.6)``
+
+    Returns:
+        (r, g, b) tuple with floats in 0-1 range.
+    """
+    # --- 1. displayColor primvar -----------------------------------------
+    gprim = UsdGeom.Gprim(prim)
+    display_color_attr = gprim.GetDisplayColorAttr()
+    if display_color_attr and display_color_attr.HasAuthoredValue():
+        colors = display_color_attr.Get()
+        if colors is not None and len(colors) > 0:
+            c = colors[0]
+            return (float(c[0]), float(c[1]), float(c[2]))
+
+    # --- 2. Material binding (requires UsdShade) -------------------------
+    if _HAS_USD_SHADE:
+        color = _color_from_material_binding(prim)
+        if color is not None:
+            return color
+
+    # --- 3. Default grey -------------------------------------------------
+    return _DEFAULT_COLOR
+
+
+def _color_from_material_binding(prim: Usd.Prim) -> tuple | None:
+    """Attempt to read diffuse/base color from the bound material's shader.
+
+    Returns (r, g, b) on success, or None if no usable color is found.
+    """
+    try:
+        binding_api = UsdShade.MaterialBindingAPI(prim)
+        binding = binding_api.GetDirectBinding()
+        material = binding.GetMaterial()
+        if not material:
+            return None
+
+        # Get the surface output and trace it to a shader
+        surface_output = material.GetSurfaceOutput()
+        if not surface_output:
+            return None
+
+        # ConnectedSource returns (source, source_name, source_type)
+        connected = surface_output.GetConnectedSource()
+        if connected is None or connected[0] is None:
+            return None
+
+        shader = UsdShade.Shader(connected[0].GetPrim())
+        if not shader:
+            return None
+
+        # Try common color input names in priority order
+        for input_name in ("diffuseColor", "baseColor", "base_color"):
+            color_input = shader.GetInput(input_name)
+            if color_input is None:
+                continue
+
+            # Skip texture-connected inputs -- only use constant values
+            if color_input.HasConnectedSource():
+                continue
+
+            val = color_input.Get()
+            if val is not None:
+                # GfVec3f or tuple-like with 3 components
+                if hasattr(val, "__len__") and len(val) >= 3:
+                    return (float(val[0]), float(val[1]), float(val[2]))
+
+        return None
+    except Exception:
+        # Any failure in the material chain is non-fatal
+        return None
 
 
 def _triangulate(
