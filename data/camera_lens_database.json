@@ -1,0 +1,282 @@
+{
+  "cameras": [
+    {
+      "id": "alexa35_og",
+      "manufacturer": "ARRI",
+      "max_resolution": [
+        4608,
+        3164
+      ],
+      "name": "ARRI ALEXA 35",
+      "native_iso": 800,
+      "sensor_height_mm": 19.22,
+      "sensor_width_mm": 27.99,
+      "gate": "Open Gate 4.6K"
+    },
+    {
+      "id": "alexa35_s35",
+      "manufacturer": "ARRI",
+      "max_resolution": [
+        4096,
+        2304
+      ],
+      "name": "ARRI ALEXA 35",
+      "native_iso": 800,
+      "sensor_height_mm": 14.00,
+      "sensor_width_mm": 24.89,
+      "gate": "Super 35 4K 16:9"
+    },
+    {
+      "id": "red_vraptor_ff",
+      "manufacturer": "RED",
+      "max_resolution": [
+        8192,
+        4320
+      ],
+      "name": "RED V-RAPTOR",
+      "native_iso": 800,
+      "sensor_height_mm": 21.60,
+      "sensor_width_mm": 40.96,
+      "gate": "Full Frame 8K"
+    },
+    {
+      "id": "red_vraptor_s35",
+      "manufacturer": "RED",
+      "max_resolution": [
+        6144,
+        3240
+      ],
+      "name": "RED V-RAPTOR",
+      "native_iso": 800,
+      "sensor_height_mm": 12.15,
+      "sensor_width_mm": 23.10,
+      "gate": "Super 35 6K"
+    },
+    {
+      "id": "venice2_ff",
+      "manufacturer": "Sony",
+      "max_resolution": [
+        8640,
+        5760
+      ],
+      "name": "Sony VENICE 2",
+      "native_iso": 800,
+      "sensor_height_mm": 24.10,
+      "sensor_width_mm": 36.20,
+      "gate": "Full Frame 8.6K"
+    },
+    {
+      "id": "venice2_s35",
+      "manufacturer": "Sony",
+      "max_resolution": [
+        4096,
+        2304
+      ],
+      "name": "Sony VENICE 2",
+      "native_iso": 800,
+      "sensor_height_mm": 13.70,
+      "sensor_width_mm": 24.40,
+      "gate": "Super 35 4K 16:9"
+    }
+  ],
+  "lenses": [
+    {
+      "id": "atlas_orion_100",
+      "image_circle_mm": 46.0,
+      "manufacturer": "Atlas",
+      "metadata_protocol": null,
+      "name": "Atlas Orion 100mm",
+      "squeeze_ratio": 2.0,
+      "t_stop_range": [
+        2.0,
+        16
+      ],
+      "focal_mm": 100,
+      "type": "anamorphic"
+    },
+    {
+      "id": "atlas_orion_40",
+      "image_circle_mm": 46.0,
+      "manufacturer": "Atlas",
+      "metadata_protocol": null,
+      "name": "Atlas Orion 40mm",
+      "squeeze_ratio": 2.0,
+      "t_stop_range": [
+        2.0,
+        16
+      ],
+      "focal_mm": 40,
+      "type": "anamorphic"
+    },
+    {
+      "id": "atlas_orion_65",
+      "image_circle_mm": 46.0,
+      "manufacturer": "Atlas",
+      "metadata_protocol": null,
+      "name": "Atlas Orion 65mm",
+      "squeeze_ratio": 2.0,
+      "t_stop_range": [
+        2.0,
+        16
+      ],
+      "focal_mm": 65,
+      "type": "anamorphic"
+    },
+    {
+      "id": "cooke_ana_100",
+      "image_circle_mm": 46.3,
+      "manufacturer": "Cooke",
+      "metadata_protocol": "Cooke /i Technology",
+      "name": "Cooke Anamorphic/i 100mm",
+      "squeeze_ratio": 2.0,
+      "t_stop_range": [
+        2.3,
+        22
+      ],
+      "focal_mm": 100,
+      "type": "anamorphic"
+    },
+    {
+      "id": "cooke_ana_25",
+      "image_circle_mm": 46.3,
+      "manufacturer": "Cooke",
+      "metadata_protocol": "Cooke /i Technology",
+      "name": "Cooke Anamorphic/i 25mm",
+      "squeeze_ratio": 2.0,
+      "t_stop_range": [
+        2.3,
+        22
+      ],
+      "focal_mm": 25,
+      "type": "anamorphic"
+    },
+    {
+      "id": "cooke_ana_32",
+      "image_circle_mm": 46.3,
+      "manufacturer": "Cooke",
+      "metadata_protocol": "Cooke /i Technology",
+      "name": "Cooke Anamorphic/i 32mm",
+      "squeeze_ratio": 2.0,
+      "t_stop_range": [
+        2.3,
+        22
+      ],
+      "focal_mm": 32,
+      "type": "anamorphic"
+    },
+    {
+      "id": "cooke_ana_40",
+      "image_circle_mm": 46.3,
+      "manufacturer": "Cooke",
+      "metadata_protocol": "Cooke /i Technology",
+      "name": "Cooke Anamorphic/i 40mm",
+      "squeeze_ratio": 2.0,
+      "t_stop_range": [
+        2.3,
+        22
+      ],
+      "focal_mm": 40,
+      "type": "anamorphic"
+    },
+    {
+      "id": "cooke_ana_50",
+      "image_circle_mm": 46.3,
+      "manufacturer": "Cooke",
+      "metadata_protocol": "Cooke /i Technology",
+      "name": "Cooke Anamorphic/i 50mm",
+      "squeeze_ratio": 2.0,
+      "t_stop_range": [
+        2.3,
+        22
+      ],
+      "focal_mm": 50,
+      "type": "anamorphic"
+    },
+    {
+      "id": "cooke_ana_75",
+      "image_circle_mm": 46.3,
+      "manufacturer": "Cooke",
+      "metadata_protocol": "Cooke /i Technology",
+      "name": "Cooke Anamorphic/i 75mm",
+      "squeeze_ratio": 2.0,
+      "t_stop_range": [
+        2.3,
+        22
+      ],
+      "focal_mm": 75,
+      "type": "anamorphic"
+    },
+    {
+      "id": "cooke_s7i_100",
+      "image_circle_mm": 46.3,
+      "manufacturer": "Cooke",
+      "metadata_protocol": "Cooke /i Technology",
+      "name": "Cooke S7/i 100mm",
+      "squeeze_ratio": 1.0,
+      "t_stop_range": [
+        2.0,
+        22
+      ],
+      "focal_mm": 100,
+      "type": "spherical"
+    },
+    {
+      "id": "cooke_s7i_25",
+      "image_circle_mm": 46.3,
+      "manufacturer": "Cooke",
+      "metadata_protocol": "Cooke /i Technology",
+      "name": "Cooke S7/i 25mm",
+      "squeeze_ratio": 1.0,
+      "t_stop_range": [
+        2.0,
+        22
+      ],
+      "focal_mm": 25,
+      "type": "spherical"
+    },
+    {
+      "id": "cooke_s7i_50",
+      "image_circle_mm": 46.3,
+      "manufacturer": "Cooke",
+      "metadata_protocol": "Cooke /i Technology",
+      "name": "Cooke S7/i 50mm",
+      "squeeze_ratio": 1.0,
+      "t_stop_range": [
+        2.0,
+        22
+      ],
+      "focal_mm": 50,
+      "type": "spherical"
+    }
+  ],
+  "presets": [
+    {
+      "camera_id": "alexa35_og",
+      "description": "Classic anamorphic look. 2x squeeze on Open Gate sensor.",
+      "id": "alexa35_cooke_ana_40",
+      "lens_id": "cooke_ana_40",
+      "name": "ARRI Alexa 35 + Cooke Anamorphic 40mm"
+    },
+    {
+      "camera_id": "alexa35_s35",
+      "description": "Super 35 wide angle. Classic documentary/indie look.",
+      "id": "alexa35_s35_cooke_s7i_25",
+      "lens_id": "cooke_s7i_25",
+      "name": "ARRI Alexa 35 S35 + Cooke S7/i 25mm"
+    },
+    {
+      "camera_id": "red_vraptor_ff",
+      "description": "Full frame anamorphic. Wide sensor with 2x squeeze.",
+      "id": "vraptor_atlas_65",
+      "lens_id": "atlas_orion_65",
+      "name": "RED V-RAPTOR FF + Atlas Orion 65mm"
+    },
+    {
+      "camera_id": "venice2_ff",
+      "description": "Full frame spherical. Standard narrative lens.",
+      "id": "venice2_cooke_s7i_50",
+      "lens_id": "cooke_s7i_50",
+      "name": "Sony VENICE 2 + Cooke S7/i 50mm"
+    }
+  ]
+}
