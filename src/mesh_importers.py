@@ -6,12 +6,12 @@ given smooth normals when none are provided, and assigned an identity transform
 (trimesh already applies scene transforms during loading).
 """
 
-import math
 import os
 
 import numpy as np
 import trimesh
 
+from math_utils import compute_vertex_normals, vec3_normalize
 from usd_loader import MeshData
 
 # Column-major 4x4 identity matrix (16 floats) for OpenGL.
@@ -262,47 +262,9 @@ def _extract_color(mesh: trimesh.Trimesh) -> tuple:
     return _DEFAULT_COLOR
 
 
-def _compute_vertex_normals(
-    vertices: list[tuple],
-    triangles: list[int],
-) -> list[tuple]:
-    """Compute smooth per-vertex normals by accumulating face normals.
-
-    Mirrors the algorithm in usd_loader.py for consistency.
-    """
-    accum = [[0.0, 0.0, 0.0] for _ in range(len(vertices))]
-
-    for i in range(0, len(triangles), 3):
-        i0, i1, i2 = triangles[i], triangles[i + 1], triangles[i + 2]
-        p0 = vertices[i0]
-        p1 = vertices[i1]
-        p2 = vertices[i2]
-
-        e1x = p1[0] - p0[0]
-        e1y = p1[1] - p0[1]
-        e1z = p1[2] - p0[2]
-        e2x = p2[0] - p0[0]
-        e2y = p2[1] - p0[1]
-        e2z = p2[2] - p0[2]
-
-        nx = e1y * e2z - e1z * e2y
-        ny = e1z * e2x - e1x * e2z
-        nz = e1x * e2y - e1y * e2x
-
-        for vi in (i0, i1, i2):
-            accum[vi][0] += nx
-            accum[vi][1] += ny
-            accum[vi][2] += nz
-
-    return [_normalize(a[0], a[1], a[2]) for a in accum]
-
-
-def _normalize(x: float, y: float, z: float) -> tuple:
-    """Return a unit-length (x, y, z) tuple; falls back to (0, 1, 0)."""
-    length = math.sqrt(x * x + y * y + z * z)
-    if length > 1e-10:
-        return (x / length, y / length, z / length)
-    return (0.0, 1.0, 0.0)
+# Normal computation imported from math_utils (compute_vertex_normals, vec3_normalize)
+_compute_vertex_normals = compute_vertex_normals
+_normalize = vec3_normalize
 
 
 def _mesh_name(file_path: str, index: int) -> str:

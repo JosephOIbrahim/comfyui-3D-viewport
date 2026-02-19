@@ -23,6 +23,8 @@ import ctypes
 import math
 from typing import Dict, List, Optional, Tuple
 
+from math_utils import mat4_inverse_safe, mat4_multiply
+
 import numpy as np
 from OpenGL.GL import (
     GL_CLAMP_TO_EDGE,
@@ -211,115 +213,11 @@ def _link_program(vertex_shader: int, fragment_shader: int) -> int:
     return program
 
 
-# ---------------------------------------------------------------------------
-# 4x4 matrix helpers (column-major, matching viewport.py conventions)
-# ---------------------------------------------------------------------------
+# Matrix math imported from math_utils (mat4_inverse_safe, mat4_multiply)
 
-
-def _mat4_multiply(a: List[float], b: List[float]) -> List[float]:
-    """Multiply two column-major 4x4 matrices: result = a * b."""
-    result = [0.0] * 16
-    for col in range(4):
-        for row in range(4):
-            s = 0.0
-            for k in range(4):
-                s += a[k * 4 + row] * b[col * 4 + k]
-            result[col * 4 + row] = s
-    return result
-
-
-def _mat4_inverse(m: List[float]) -> Optional[List[float]]:
-    """Invert a column-major 4x4 matrix.  Returns None if singular."""
-    # Expand to readable indexing: m[col*4 + row]
-    inv = [0.0] * 16
-
-    inv[0] = (
-        m[5] * m[10] * m[15] - m[5] * m[11] * m[14]
-        - m[9] * m[6] * m[15] + m[9] * m[7] * m[14]
-        + m[13] * m[6] * m[11] - m[13] * m[7] * m[10]
-    )
-    inv[4] = (
-        -m[4] * m[10] * m[15] + m[4] * m[11] * m[14]
-        + m[8] * m[6] * m[15] - m[8] * m[7] * m[14]
-        - m[12] * m[6] * m[11] + m[12] * m[7] * m[10]
-    )
-    inv[8] = (
-        m[4] * m[9] * m[15] - m[4] * m[11] * m[13]
-        - m[8] * m[5] * m[15] + m[8] * m[7] * m[13]
-        + m[12] * m[5] * m[11] - m[12] * m[7] * m[9]
-    )
-    inv[12] = (
-        -m[4] * m[9] * m[14] + m[4] * m[10] * m[13]
-        + m[8] * m[5] * m[14] - m[8] * m[6] * m[13]
-        - m[12] * m[5] * m[10] + m[12] * m[6] * m[9]
-    )
-    inv[1] = (
-        -m[1] * m[10] * m[15] + m[1] * m[11] * m[14]
-        + m[9] * m[2] * m[15] - m[9] * m[3] * m[14]
-        - m[13] * m[2] * m[11] + m[13] * m[3] * m[10]
-    )
-    inv[5] = (
-        m[0] * m[10] * m[15] - m[0] * m[11] * m[14]
-        - m[8] * m[2] * m[15] + m[8] * m[3] * m[14]
-        + m[12] * m[2] * m[11] - m[12] * m[3] * m[10]
-    )
-    inv[9] = (
-        -m[0] * m[9] * m[15] + m[0] * m[11] * m[13]
-        + m[8] * m[1] * m[15] - m[8] * m[3] * m[13]
-        - m[12] * m[1] * m[11] + m[12] * m[3] * m[9]
-    )
-    inv[13] = (
-        m[0] * m[9] * m[14] - m[0] * m[10] * m[13]
-        - m[8] * m[1] * m[14] + m[8] * m[2] * m[13]
-        + m[12] * m[1] * m[10] - m[12] * m[2] * m[9]
-    )
-    inv[2] = (
-        m[1] * m[6] * m[15] - m[1] * m[7] * m[14]
-        - m[5] * m[2] * m[15] + m[5] * m[3] * m[14]
-        + m[13] * m[2] * m[7] - m[13] * m[3] * m[6]
-    )
-    inv[6] = (
-        -m[0] * m[6] * m[15] + m[0] * m[7] * m[14]
-        + m[4] * m[2] * m[15] - m[4] * m[3] * m[14]
-        - m[12] * m[2] * m[7] + m[12] * m[3] * m[6]
-    )
-    inv[10] = (
-        m[0] * m[5] * m[15] - m[0] * m[7] * m[13]
-        - m[4] * m[1] * m[15] + m[4] * m[3] * m[13]
-        + m[12] * m[1] * m[7] - m[12] * m[3] * m[5]
-    )
-    inv[14] = (
-        -m[0] * m[5] * m[14] + m[0] * m[6] * m[13]
-        + m[4] * m[1] * m[14] - m[4] * m[2] * m[13]
-        - m[12] * m[1] * m[6] + m[12] * m[2] * m[5]
-    )
-    inv[3] = (
-        -m[1] * m[6] * m[11] + m[1] * m[7] * m[10]
-        + m[5] * m[2] * m[11] - m[5] * m[3] * m[10]
-        - m[9] * m[2] * m[7] + m[9] * m[3] * m[6]
-    )
-    inv[7] = (
-        m[0] * m[6] * m[11] - m[0] * m[7] * m[10]
-        - m[4] * m[2] * m[11] + m[4] * m[3] * m[10]
-        + m[8] * m[2] * m[7] - m[8] * m[3] * m[6]
-    )
-    inv[11] = (
-        -m[0] * m[5] * m[11] + m[0] * m[7] * m[9]
-        + m[4] * m[1] * m[11] - m[4] * m[3] * m[9]
-        - m[8] * m[1] * m[7] + m[8] * m[3] * m[5]
-    )
-    inv[15] = (
-        m[0] * m[5] * m[10] - m[0] * m[6] * m[9]
-        - m[4] * m[1] * m[10] + m[4] * m[2] * m[9]
-        + m[8] * m[1] * m[6] - m[8] * m[2] * m[5]
-    )
-
-    det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12]
-    if abs(det) < 1e-12:
-        return None
-
-    inv_det = 1.0 / det
-    return [x * inv_det for x in inv]
+# Aliases for internal usage (keep call sites unchanged)
+_mat4_multiply = mat4_multiply
+_mat4_inverse = mat4_inverse_safe
 
 
 # ---------------------------------------------------------------------------

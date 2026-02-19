@@ -16,6 +16,12 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+from math_utils import (
+    mat4_inverse as _mat4_inverse,
+    mat4_multiply as _mat4_mul,
+    mat4_transform_point as _mat4_transform_point,
+)
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -338,109 +344,4 @@ def _compute_world_aabb(
     return (lo[0], lo[1], lo[2]), (hi[0], hi[1], hi[2])
 
 
-# ---------------------------------------------------------------------------
-# Pure-Python 4x4 matrix math (column-major layout)
-# ---------------------------------------------------------------------------
-#
-# Column-major flat list layout:
-#   index:  0  1  2  3  | 4  5  6  7  | 8  9 10 11 | 12 13 14 15
-#   means: [col0        | col1        | col2        | col3       ]
-#
-#   element(row, col) = m[col * 4 + row]
-
-def _mat4_mul(a: list[float], b: list[float]) -> list[float]:
-    """Multiply two column-major 4x4 matrices: result = A * B."""
-    r = [0.0] * 16
-    for col in range(4):
-        for row in range(4):
-            s = 0.0
-            for k in range(4):
-                s += a[k * 4 + row] * b[col * 4 + k]
-            r[col * 4 + row] = s
-    return r
-
-
-def _mat4_inverse(m: list[float]) -> list[float]:
-    """Invert a column-major 4x4 matrix using cofactor expansion.
-
-    Returns the inverse matrix.  Raises ValueError if the matrix is singular.
-    """
-    # For readability, access as row-major: a(row, col)
-    def a(r: int, c: int) -> float:
-        return m[c * 4 + r]
-
-    # Compute all 2x2 minors of the top two rows paired with bottom two rows.
-    # Using the Laplace expansion technique for 4x4 inversion.
-
-    s0 = a(0, 0) * a(1, 1) - a(1, 0) * a(0, 1)
-    s1 = a(0, 0) * a(1, 2) - a(1, 0) * a(0, 2)
-    s2 = a(0, 0) * a(1, 3) - a(1, 0) * a(0, 3)
-    s3 = a(0, 1) * a(1, 2) - a(1, 1) * a(0, 2)
-    s4 = a(0, 1) * a(1, 3) - a(1, 1) * a(0, 3)
-    s5 = a(0, 2) * a(1, 3) - a(1, 2) * a(0, 3)
-
-    c5 = a(2, 2) * a(3, 3) - a(3, 2) * a(2, 3)
-    c4 = a(2, 1) * a(3, 3) - a(3, 1) * a(2, 3)
-    c3 = a(2, 1) * a(3, 2) - a(3, 1) * a(2, 2)
-    c2 = a(2, 0) * a(3, 3) - a(3, 0) * a(2, 3)
-    c1 = a(2, 0) * a(3, 2) - a(3, 0) * a(2, 2)
-    c0 = a(2, 0) * a(3, 1) - a(3, 0) * a(2, 1)
-
-    det = s0 * c5 - s1 * c4 + s2 * c3 + s3 * c2 - s4 * c1 + s5 * c0
-    if abs(det) < 1e-14:
-        raise ValueError("Singular matrix cannot be inverted")
-
-    inv_det = 1.0 / det
-
-    # Adjugate matrix (transposed cofactor matrix), written row by row,
-    # then stored column-major.
-    inv_rows = [
-        [
-            ( a(1, 1) * c5 - a(1, 2) * c4 + a(1, 3) * c3) * inv_det,
-            (-a(0, 1) * c5 + a(0, 2) * c4 - a(0, 3) * c3) * inv_det,
-            ( a(3, 1) * s5 - a(3, 2) * s4 + a(3, 3) * s3) * inv_det,
-            (-a(2, 1) * s5 + a(2, 2) * s4 - a(2, 3) * s3) * inv_det,
-        ],
-        [
-            (-a(1, 0) * c5 + a(1, 2) * c2 - a(1, 3) * c1) * inv_det,
-            ( a(0, 0) * c5 - a(0, 2) * c2 + a(0, 3) * c1) * inv_det,
-            (-a(3, 0) * s5 + a(3, 2) * s2 - a(3, 3) * s1) * inv_det,
-            ( a(2, 0) * s5 - a(2, 2) * s2 + a(2, 3) * s1) * inv_det,
-        ],
-        [
-            ( a(1, 0) * c4 - a(1, 1) * c2 + a(1, 3) * c0) * inv_det,
-            (-a(0, 0) * c4 + a(0, 1) * c2 - a(0, 3) * c0) * inv_det,
-            ( a(3, 0) * s4 - a(3, 1) * s2 + a(3, 3) * s0) * inv_det,
-            (-a(2, 0) * s4 + a(2, 1) * s2 - a(2, 3) * s0) * inv_det,
-        ],
-        [
-            (-a(1, 0) * c3 + a(1, 1) * c1 - a(1, 2) * c0) * inv_det,
-            ( a(0, 0) * c3 - a(0, 1) * c1 + a(0, 2) * c0) * inv_det,
-            (-a(3, 0) * s3 + a(3, 1) * s1 - a(3, 2) * s0) * inv_det,
-            ( a(2, 0) * s3 - a(2, 1) * s1 + a(2, 2) * s0) * inv_det,
-        ],
-    ]
-
-    # Store column-major
-    result = [0.0] * 16
-    for row in range(4):
-        for col in range(4):
-            result[col * 4 + row] = inv_rows[row][col]
-    return result
-
-
-def _mat4_transform_point(
-    m: list[float], x: float, y: float, z: float,
-) -> tuple[float, float, float]:
-    """Transform a point (x, y, z, w=1) by a column-major 4x4 matrix.
-
-    Performs perspective division (divide by w) for projection unproject.
-    """
-    rx = m[0] * x + m[4] * y + m[8] * z + m[12]
-    ry = m[1] * x + m[5] * y + m[9] * z + m[13]
-    rz = m[2] * x + m[6] * y + m[10] * z + m[14]
-    rw = m[3] * x + m[7] * y + m[11] * z + m[15]
-
-    if abs(rw) < 1e-14:
-        return (rx, ry, rz)
-    return (rx / rw, ry / rw, rz / rw)
+# Matrix math imported from math_utils (mat4_inverse, mat4_multiply, mat4_transform_point)

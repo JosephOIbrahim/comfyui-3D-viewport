@@ -30,7 +30,6 @@ Requires Python 3.12 venv with: usd-core, PySide6, PyOpenGL, numpy, trimesh
 
 import ctypes
 import json
-import math
 import os
 import sys
 import time
@@ -105,6 +104,10 @@ from file_drop import FileDropHandler, FileDropOverlay, detect_format
 from grid import GridRenderer
 from hud import HUD
 from lighting import LightRig, MAX_LIGHTS
+from math_utils import (
+    look_at, mat4_multiply, scale_matrix, scale_matrix_uniform,
+    translation_matrix,
+)
 from mesh_importers import load_mesh_file
 from projection import preset_from_database
 from selection import SelectionManager, get_highlight_color, get_highlight_scale
@@ -187,76 +190,6 @@ void main() {
 
 
 # ---------------------------------------------------------------------------
-# Math helpers
-# ---------------------------------------------------------------------------
-
-def look_at(eye: tuple, target: tuple, up: tuple) -> list[float]:
-    """Build a look-at view matrix (column-major for GL)."""
-    def sub(a, b):
-        return (a[0]-b[0], a[1]-b[1], a[2]-b[2])
-    def normalize(v):
-        l = math.sqrt(v[0]**2 + v[1]**2 + v[2]**2)
-        return (v[0]/l, v[1]/l, v[2]/l) if l > 0 else v
-    def cross(a, b):
-        return (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0])
-    def dot(a, b):
-        return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]
-
-    f = normalize(sub(target, eye))
-    s = normalize(cross(f, up))
-    u = cross(s, f)
-
-    return [
-        s[0], u[0], -f[0], 0,
-        s[1], u[1], -f[1], 0,
-        s[2], u[2], -f[2], 0,
-        -dot(s, eye), -dot(u, eye), dot(f, eye), 1,
-    ]
-
-
-def translation_matrix(tx: float, ty: float, tz: float) -> list[float]:
-    """4x4 translation matrix, column-major."""
-    return [
-        1, 0, 0, 0,
-        0, 1, 0, 0,
-        0, 0, 1, 0,
-        tx, ty, tz, 1,
-    ]
-
-
-def scale_matrix(sx: float, sy: float, sz: float) -> list[float]:
-    """4x4 scale matrix, column-major."""
-    return [
-        sx, 0, 0, 0,
-        0, sy, 0, 0,
-        0, 0, sz, 0,
-        0, 0, 0, 1,
-    ]
-
-
-def mat4_multiply(a: list[float], b: list[float]) -> list[float]:
-    """Multiply two column-major 4x4 matrices."""
-    result = [0.0] * 16
-    for col in range(4):
-        for row in range(4):
-            s = 0.0
-            for k in range(4):
-                s += a[k * 4 + row] * b[col * 4 + k]
-            result[col * 4 + row] = s
-    return result
-
-
-def scale_matrix_uniform(s: float) -> list[float]:
-    """4x4 uniform scale matrix, column-major."""
-    return [
-        s, 0, 0, 0,
-        0, s, 0, 0,
-        0, 0, s, 0,
-        0, 0, 0, 1,
-    ]
-
-
-# ---------------------------------------------------------------------------
 # GL helpers
 # ---------------------------------------------------------------------------
 
@@ -297,6 +230,7 @@ class StormViewport(QOpenGLWidget):
         super().__init__(parent)
         self._stage = stage
         self._program = None
+        self._uniform_locs: dict[str, int] = {}  # cached uniform locations
         self._depth_verified = False
         self._initialized = False
         self._width = 800
@@ -375,6 +309,19 @@ class StormViewport(QOpenGLWidget):
             glCullFace(GL_BACK)
 
             self._program = create_shader_program(VERTEX_SHADER, FRAGMENT_SHADER)
+
+            # Cache uniform locations (avoids per-frame string lookups)
+            uniform_names = [
+                "uProjection", "uView", "uModel", "uBaseColor",
+                "uViewPos", "uAmbientOverride", "uLightCount",
+            ]
+            for i in range(MAX_LIGHTS):
+                uniform_names.append(f"uLightDirs[{i}]")
+                uniform_names.append(f"uLightColors[{i}]")
+            self._uniform_locs = {
+                name: glGetUniformLocation(self._program, name)
+                for name in uniform_names
+            }
 
             # Build geometry
             if self._scene_file:
@@ -570,13 +517,15 @@ class StormViewport(QOpenGLWidget):
 
         glUseProgram(self._program)
 
-        proj_loc = glGetUniformLocation(self._program, "uProjection")
-        view_loc = glGetUniformLocation(self._program, "uView")
-        model_loc = glGetUniformLocation(self._program, "uModel")
-        color_loc = glGetUniformLocation(self._program, "uBaseColor")
-        viewpos_loc = glGetUniformLocation(self._program, "uViewPos")
-        ambient_loc = glGetUniformLocation(self._program, "uAmbientOverride")
-        light_count_loc = glGetUniformLocation(self._program, "uLightCount")
+        # Use cached uniform locations (no per-frame string lookups)
+        uloc = self._uniform_locs
+        proj_loc = uloc["uProjection"]
+        view_loc = uloc["uView"]
+        model_loc = uloc["uModel"]
+        color_loc = uloc["uBaseColor"]
+        viewpos_loc = uloc["uViewPos"]
+        ambient_loc = uloc["uAmbientOverride"]
+        light_count_loc = uloc["uLightCount"]
 
         glUniformMatrix4fv(proj_loc, 1, False, (ctypes.c_float * 16)(*proj))
         glUniformMatrix4fv(view_loc, 1, False, (ctypes.c_float * 16)(*view))
@@ -594,10 +543,8 @@ class StormViewport(QOpenGLWidget):
             dirs_padded = dirs + [0.0] * (MAX_LIGHTS * 3 - len(dirs))
             colors_padded = colors + [0.0] * (MAX_LIGHTS * 3 - len(colors))
             for i in range(light_count):
-                loc_d = glGetUniformLocation(self._program, f"uLightDirs[{i}]")
-                loc_c = glGetUniformLocation(self._program, f"uLightColors[{i}]")
-                glUniform3f(loc_d, dirs_padded[i*3], dirs_padded[i*3+1], dirs_padded[i*3+2])
-                glUniform3f(loc_c, colors_padded[i*3], colors_padded[i*3+1], colors_padded[i*3+2])
+                glUniform3f(uloc[f"uLightDirs[{i}]"], dirs_padded[i*3], dirs_padded[i*3+1], dirs_padded[i*3+2])
+                glUniform3f(uloc[f"uLightColors[{i}]"], colors_padded[i*3], colors_padded[i*3+1], colors_padded[i*3+2])
 
         # Primary draw pass
         shading.apply_pre_draw()
@@ -1008,6 +955,30 @@ class StormViewport(QOpenGLWidget):
         self._height = h
         glViewport(0, 0, w, h)
 
+    def cleanup_gl(self):
+        """Release GL resources and stop background services."""
+        # Stop animation timer
+        if self._anim_timer.isActive():
+            self._anim_timer.stop()
+
+        # Disconnect ComfyUI bridge
+        if self._bridge.is_connected:
+            try:
+                self._bridge.disconnect()
+            except Exception:
+                pass
+
+        # Cleanup sub-renderers that have cleanup methods
+        self.makeCurrent()
+        try:
+            self._grid.cleanup()
+            self._environment.cleanup()
+            self._aov.cleanup()
+        except Exception:
+            pass
+        finally:
+            self.doneCurrent()
+
 
 # ---------------------------------------------------------------------------
 # Main window
@@ -1019,10 +990,15 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("CarWash-2 -- Storm Viewport")
         self.resize(800, 600)
 
-        viewport = StormViewport(stage, self)
+        self._viewport = StormViewport(stage, self)
         if scene_file:
-            viewport.set_scene_file(scene_file)
-        self.setCentralWidget(viewport)
+            self._viewport.set_scene_file(scene_file)
+        self.setCentralWidget(self._viewport)
+
+    def closeEvent(self, event):
+        """Clean up GL resources and background services on window close."""
+        self._viewport.cleanup_gl()
+        event.accept()
 
 
 # ---------------------------------------------------------------------------
