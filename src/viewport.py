@@ -1,18 +1,27 @@
-"""CarWash-2 Storm Viewport — Phase 0, Sprint 1.
+"""CarWash-2 Storm Viewport -- Phase 0, Sprint 3.
 
-Renders a USD stage (cube + ground plane) in a Qt window via OpenGL.
-Reads back the depth buffer to verify the AOV pipeline.
+Renders a USD stage in a Qt window via OpenGL with:
+- Blinn-Phong shaded geometry (cube + ground or loaded USD meshes)
+- World grid + axis gizmo overlay
+- Camera info HUD with FPS counter
+- Depth + Normal AOV export (P key)
+- LOAD3D_CAMERA JSON export (L key)
+- Physical camera presets (0-4 keys)
+- DCC-standard orbit/pan/dolly controls
 
 Usage:
-    python src/viewport.py
+    python src/viewport.py                    # Default cube scene
+    python src/viewport.py path/to/model.usd  # Load USD file
 
-Requires Python 3.12 venv with: usd-core, PySide6, PyOpenGL
+Requires Python 3.12 venv with: usd-core, PySide6, PyOpenGL, numpy
     .venv/Scripts/python src/viewport.py
 """
 
 import ctypes
+import json
 import math
 import sys
+import time
 
 import numpy as np
 
@@ -67,13 +76,17 @@ from OpenGL.GL import (
     glBindFramebuffer,
 )
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QSurfaceFormat
+from PySide6.QtGui import QPainter, QSurfaceFormat
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QApplication, QMainWindow
 
+from aov_renderer import AOVRenderer
 from camera import OrbitCamera
+from grid import GridRenderer
+from hud import HUD
 from projection import preset_from_database
 from stage_builder import create_default_stage, get_cube_vertices
+from usd_loader import extract_meshes, load_usd_file
 
 # ---------------------------------------------------------------------------
 # Shaders
@@ -180,6 +193,14 @@ def scale_matrix(sx: float, sy: float, sz: float) -> list[float]:
     ]
 
 
+IDENTITY_MATRIX = [
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0,
+    0, 0, 0, 1,
+]
+
+
 def mat4_multiply(a: list[float], b: list[float]) -> list[float]:
     """Multiply two column-major 4x4 matrices."""
     result = [0.0] * 16
@@ -228,22 +249,19 @@ class StormViewport(QOpenGLWidget):
 
     Currently uses direct GL (no Hydra Storm) because usd-core pip wheels
     don't include UsdImagingGL. The scene is read from the USD stage.
-    When UsdImagingGL becomes available (Sprint 2), the rendering call
-    swaps to engine.Render() — the rest stays identical.
     """
 
     def __init__(self, stage, parent=None):
         super().__init__(parent)
         self._stage = stage
         self._program = None
-        self._cube_vao = None
-        self._cube_index_count = 0
-        self._ground_vao = None
-        self._ground_index_count = 0
         self._depth_verified = False
         self._initialized = False
         self._width = 800
         self._height = 600
+
+        # Geometry: list of (vao, index_count, model_matrix, color)
+        self._draw_list: list[tuple] = []
 
         # Interactive orbit camera
         self._camera = OrbitCamera(
@@ -253,11 +271,24 @@ class StormViewport(QOpenGLWidget):
             elevation=25.0,
         )
 
+        # Sub-renderers
+        self._grid = GridRenderer()
+        self._hud = HUD()
+        self._aov = AOVRenderer()
+
+        # FPS tracking
+        self._frame_count = 0
+        self._fps_time = time.time()
+        self._fps = 0.0
+
         # Mouse tracking state
         self._last_mouse_x = 0
         self._last_mouse_y = 0
         self._mouse_button = None
         self._alt_held = False
+
+        # USD file path (if loaded externally)
+        self._usd_file = None
 
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
@@ -272,15 +303,15 @@ class StormViewport(QOpenGLWidget):
 
             self._program = create_shader_program(VERTEX_SHADER, FRAGMENT_SHADER)
 
-            # Build geometry from stage_builder
-            vertices, normals, indices = get_cube_vertices()
-            self._cube_vao, self._cube_index_count = self._upload_mesh(
-                vertices, normals, indices
-            )
-            # Reuse same unit cube geometry for ground (transformed via model matrix)
-            self._ground_vao, self._ground_index_count = self._upload_mesh(
-                vertices, normals, indices
-            )
+            # Build geometry
+            if self._usd_file:
+                self._load_usd_geometry()
+            else:
+                self._load_default_geometry()
+
+            # Initialize sub-renderers
+            self._grid.setup()
+            self._aov.setup(self._width, self._height)
 
             self._initialized = True
             print("GL initialized: shader program compiled, geometry uploaded.")
@@ -288,6 +319,49 @@ class StormViewport(QOpenGLWidget):
             print(f"initializeGL FAILED: {e}")
             import traceback
             traceback.print_exc()
+
+    def _load_default_geometry(self):
+        """Load the default cube + ground plane scene."""
+        vertices, normals, indices = get_cube_vertices()
+
+        # Cube: translate up by 0.5
+        cube_vao, cube_count = self._upload_mesh(vertices, normals, indices)
+        cube_model = translation_matrix(0.0, 0.5, 0.0)
+        self._draw_list.append((cube_vao, cube_count, cube_model, (0.6, 0.6, 0.6)))
+
+        # Ground plane: flat scaled cube
+        ground_vao, ground_count = self._upload_mesh(vertices, normals, indices)
+        ground_t = translation_matrix(0.0, -0.025, 0.0)
+        ground_s = scale_matrix(5.0, 0.05, 5.0)
+        ground_model = mat4_multiply(ground_t, ground_s)
+        self._draw_list.append((ground_vao, ground_count, ground_model, (0.35, 0.35, 0.38)))
+
+    def _load_usd_geometry(self):
+        """Load geometry from a USD file."""
+        try:
+            stage = load_usd_file(self._usd_file)
+            meshes = extract_meshes(stage)
+            if not meshes:
+                print(f"  No meshes found in {self._usd_file}, falling back to default scene.")
+                self._load_default_geometry()
+                return
+
+            print(f"  Loaded {len(meshes)} mesh(es) from {self._usd_file}")
+            for mesh_data in meshes:
+                vao, count = self._upload_mesh(
+                    mesh_data.vertices, mesh_data.normals, mesh_data.indices
+                )
+                self._draw_list.append(
+                    (vao, count, mesh_data.transform, (0.6, 0.6, 0.6))
+                )
+        except Exception as e:
+            print(f"  Failed to load USD file: {e}")
+            print("  Falling back to default scene.")
+            self._load_default_geometry()
+
+    def set_usd_file(self, path: str):
+        """Set USD file path to load on initialization."""
+        self._usd_file = path
 
     def _upload_mesh(self, vertices, normals, indices):
         """Upload vertex/normal/index data to GPU, return (VAO, index_count)."""
@@ -325,13 +399,27 @@ class StormViewport(QOpenGLWidget):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         if not self._initialized:
             return
-        glUseProgram(self._program)
 
-        # Camera matrices from orbit camera (physical or simple FOV)
+        # -- FPS tracking --
+        self._frame_count += 1
+        now = time.time()
+        elapsed = now - self._fps_time
+        if elapsed >= 1.0:
+            self._fps = self._frame_count / elapsed
+            self._frame_count = 0
+            self._fps_time = now
+
+        # -- Camera matrices --
         cam = self._camera
         aspect = self._width / max(self._height, 1)
         proj = cam.projection_matrix(aspect)
         view = look_at(cam.eye, tuple(cam.target), cam.up)
+
+        # -- Draw grid (behind scene geometry) --
+        self._grid.draw(view, proj)
+
+        # -- Draw scene geometry --
+        glUseProgram(self._program)
 
         proj_loc = glGetUniformLocation(self._program, "uProjection")
         view_loc = glGetUniformLocation(self._program, "uView")
@@ -345,28 +433,80 @@ class StormViewport(QOpenGLWidget):
         glUniform3f(light_loc, 0.5, 0.8, 0.6)  # Key light direction
         glUniform3f(viewpos_loc, *cam.eye)
 
-        # Draw cube: translate up by 0.5 (matches USD stage)
-        cube_model = translation_matrix(0.0, 0.5, 0.0)
-        glUniformMatrix4fv(model_loc, 1, False, (ctypes.c_float * 16)(*cube_model))
-        glUniform3f(color_loc, 0.6, 0.6, 0.6)  # Grey
-        glBindVertexArray(self._cube_vao)
-        glDrawElements(GL_TRIANGLES, self._cube_index_count, GL_UNSIGNED_INT, None)
-
-        # Draw ground plane: translate down, scale flat
-        ground_t = translation_matrix(0.0, -0.025, 0.0)
-        ground_s = scale_matrix(5.0, 0.05, 5.0)
-        ground_model = mat4_multiply(ground_t, ground_s)
-        glUniformMatrix4fv(model_loc, 1, False, (ctypes.c_float * 16)(*ground_model))
-        glUniform3f(color_loc, 0.35, 0.35, 0.38)  # Darker grey
-        glBindVertexArray(self._ground_vao)
-        glDrawElements(GL_TRIANGLES, self._ground_index_count, GL_UNSIGNED_INT, None)
+        for vao, index_count, model, color in self._draw_list:
+            glUniformMatrix4fv(model_loc, 1, False, (ctypes.c_float * 16)(*model))
+            glUniform3f(color_loc, *color)
+            glBindVertexArray(vao)
+            glDrawElements(GL_TRIANGLES, index_count, GL_UNSIGNED_INT, None)
 
         glBindVertexArray(0)
+        glUseProgram(0)
 
-        # Depth AOV verification — deferred to allow framebuffer to settle
+        # -- Draw HUD overlay via QPainter --
+        if self._hud.enabled:
+            camera_info = self._hud.build_camera_info(self._camera)
+            painter = QPainter(self)
+            self._hud.draw(painter, self._width, self._height, camera_info, self._fps)
+            painter.end()
+
+        # Depth AOV verification -- deferred to allow framebuffer to settle
         if not self._depth_verified:
             self._depth_verified = True  # Set first to prevent re-entry
             QTimer.singleShot(500, self._deferred_depth_verify)
+
+    def _draw_scene_for_aov(self, program):
+        """Callback for AOV renderer: draw all scene geometry with a given shader program."""
+        cam = self._camera
+        aspect = self._width / max(self._height, 1)
+        proj = cam.projection_matrix(aspect)
+        view = look_at(cam.eye, tuple(cam.target), cam.up)
+
+        proj_loc = glGetUniformLocation(program, "uProjection")
+        view_loc = glGetUniformLocation(program, "uView")
+        model_loc = glGetUniformLocation(program, "uModel")
+
+        glUniformMatrix4fv(proj_loc, 1, False, (ctypes.c_float * 16)(*proj))
+        glUniformMatrix4fv(view_loc, 1, False, (ctypes.c_float * 16)(*view))
+
+        for vao, index_count, model, _color in self._draw_list:
+            glUniformMatrix4fv(model_loc, 1, False, (ctypes.c_float * 16)(*model))
+            glBindVertexArray(vao)
+            glDrawElements(GL_TRIANGLES, index_count, GL_UNSIGNED_INT, None)
+
+        glBindVertexArray(0)
+
+    def _save_aovs(self):
+        """Save depth + normal AOV passes to PNG files."""
+        self.makeCurrent()
+        try:
+            # Resize AOV FBO if viewport changed
+            if self._aov.width != self._width or self._aov.height != self._height:
+                self._aov.setup(self._width, self._height)
+
+            near = self._camera.near
+            far = self._camera.far
+
+            self._aov.save_depth_png("depth_aov.png", self._draw_scene_for_aov, near, far)
+            self._aov.save_normal_png("normal_aov.png", self._draw_scene_for_aov)
+
+            print(f"AOVs saved: depth_aov.png, normal_aov.png ({self._width}x{self._height})")
+        except Exception as e:
+            print(f"AOV save failed: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            self.doneCurrent()
+
+    def _export_camera_json(self):
+        """Export camera state as LOAD3D_CAMERA JSON."""
+        camera_dict = self._camera.to_load3d_camera()
+        path = "camera_export.json"
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(camera_dict, f, indent=2, sort_keys=True)
+        print(f"Camera exported: {path}")
+        print(f"  Sensor: {self._camera.sensor_name} | Lens: {self._camera.lens_name}")
+        print(f"  Position: {camera_dict['position']}")
+        print(f"  Target: {camera_dict['target']}")
 
     def _deferred_depth_verify(self):
         """Trigger depth readback after framebuffer is fully rendered."""
@@ -375,10 +515,7 @@ class StormViewport(QOpenGLWidget):
         self.doneCurrent()
 
     def _verify_depth(self):
-        """Read back the GL depth buffer and report statistics.
-
-        With MSAA disabled (samples=0), we read directly from Qt's default FBO.
-        """
+        """Read back the GL depth buffer and report statistics."""
         w, h = self._width, self._height
         try:
             glBindFramebuffer(GL_READ_FRAMEBUFFER, self.defaultFramebufferObject())
@@ -386,24 +523,22 @@ class StormViewport(QOpenGLWidget):
             depth_arr = np.frombuffer(depth, dtype=np.float32)
 
             if len(depth_arr) == 0:
-                print("Depth AOV: WARNING — empty buffer")
+                print("Depth AOV: WARNING -- empty buffer")
                 return
 
             d_min = float(depth_arr.min())
             d_max = float(depth_arr.max())
             total = len(depth_arr)
-            # Pixels < 1.0 have geometry; pixels at 1.0 are background (far plane)
             near_geo = int(np.count_nonzero(depth_arr < 0.999))
             print(f"Depth AOV: min={d_min:.4f}, max={d_max:.4f}, "
                   f"geometry pixels={near_geo}/{total}, "
                   f"background pixels={total - near_geo}/{total} "
-                  f"({'PASS' if near_geo > 0 else 'FAIL — no geometry in depth buffer'})")
+                  f"({'PASS' if near_geo > 0 else 'FAIL -- no geometry in depth buffer'})")
         except Exception as e:
             print(f"Depth AOV: readback failed ({e})")
-            print("  Depth pipeline will be fully validated in Sprint 2 with render-to-texture.")
 
     # ------------------------------------------------------------------
-    # Input handling — DCC-standard orbit/pan/dolly
+    # Input handling -- DCC-standard orbit/pan/dolly
     # ------------------------------------------------------------------
 
     def mousePressEvent(self, event):
@@ -448,7 +583,7 @@ class StormViewport(QOpenGLWidget):
         self.update()
         event.accept()
 
-    # Camera preset map: key → (preset_id or None, label)
+    # Camera preset map: key -> (preset_id or None, label)
     _CAMERA_PRESETS = {
         Qt.Key_0: (None, "Simple FOV 45deg"),
         Qt.Key_1: ("alexa35_cooke_ana_40", "ARRI Alexa 35 + Cooke Ana 40mm"),
@@ -458,11 +593,20 @@ class StormViewport(QOpenGLWidget):
     }
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_F:
+        key = event.key()
+
+        if key == Qt.Key_F:
             self._camera.frame_scene()
             self.update()
-        elif event.key() in self._CAMERA_PRESETS:
-            preset_id, label = self._CAMERA_PRESETS[event.key()]
+        elif key == Qt.Key_H:
+            self._hud.toggle()
+            self.update()
+        elif key == Qt.Key_P:
+            self._save_aovs()
+        elif key == Qt.Key_L:
+            self._export_camera_json()
+        elif key in self._CAMERA_PRESETS:
+            preset_id, label = self._CAMERA_PRESETS[key]
             if preset_id is None:
                 self._camera.clear_projection()
             else:
@@ -482,7 +626,7 @@ class StormViewport(QOpenGLWidget):
         parent = self.parentWidget()
         if parent is not None:
             cam = self._camera
-            title = f"CarWash-2 — {cam.sensor_name} | {cam.lens_name}"
+            title = f"CarWash-2 -- {cam.sensor_name} | {cam.lens_name}"
             parent.setWindowTitle(title)
 
     def resizeGL(self, w, h):
@@ -496,12 +640,14 @@ class StormViewport(QOpenGLWidget):
 # ---------------------------------------------------------------------------
 
 class MainWindow(QMainWindow):
-    def __init__(self, stage):
+    def __init__(self, stage, usd_file=None):
         super().__init__()
-        self.setWindowTitle("CarWash-2 — Storm Viewport")
+        self.setWindowTitle("CarWash-2 -- Storm Viewport")
         self.resize(800, 600)
 
         viewport = StormViewport(stage, self)
+        if usd_file:
+            viewport.set_usd_file(usd_file)
         self.setCentralWidget(viewport)
 
 
@@ -515,12 +661,18 @@ def main():
     fmt.setVersion(3, 3)
     fmt.setProfile(QSurfaceFormat.CoreProfile)
     fmt.setDepthBufferSize(24)
-    # MSAA disabled for Sprint 1 — enables direct depth buffer readback.
-    # Re-enable in Sprint 2 with render-to-texture pipeline.
+    # MSAA disabled -- enables direct depth buffer readback.
+    # Re-enable with render-to-texture pipeline in later sprints.
     fmt.setSamples(0)
     QSurfaceFormat.setDefaultFormat(fmt)
 
     app = QApplication(sys.argv)
+
+    # Check for USD file argument
+    usd_file = None
+    if len(sys.argv) > 1:
+        usd_file = sys.argv[1]
+        print(f"Loading USD file: {usd_file}")
 
     # Build USD stage
     print("Building USD stage...")
@@ -532,10 +684,12 @@ def main():
         print(f"  {prim.GetPath()} [{prim.GetTypeName()}]")
 
     # Launch viewport
-    window = MainWindow(stage)
+    window = MainWindow(stage, usd_file=usd_file)
     window.show()
 
     print("\nViewport open. Close the window to exit.")
+    print("Controls: Alt+LMB=Orbit  Alt+MMB=Pan  Scroll=Zoom  F=Frame")
+    print("          0-4=Camera Presets  H=Toggle HUD  P=Save AOVs  L=Export Camera")
     sys.exit(app.exec())
 
 
