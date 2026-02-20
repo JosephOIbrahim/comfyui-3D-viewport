@@ -94,6 +94,15 @@ COMFYUI_URL = f"http://{COMFYUI_HOST}:{COMFYUI_PORT}"
 AOV_EXPORT_INTERVAL = 0.5   # seconds between auto-exports
 
 # ---------------------------------------------------------------------------
+# Viewport Bridge (WebSocket server for ComfyUI panel)
+# ---------------------------------------------------------------------------
+
+BRIDGE_WS_PORT = int(os.getenv("BRIDGE_WS_PORT", "8766"))
+BRIDGE_AUTO_EXPORT = os.getenv("BRIDGE_AUTO_EXPORT", "1") == "1"
+BRIDGE_CAMERA_THROTTLE_MS = 100  # min ms between camera broadcasts
+CAMERA_STATE_FILE = "camera_state.json"  # auto-written for file-based polling
+
+# ---------------------------------------------------------------------------
 # File formats
 # ---------------------------------------------------------------------------
 

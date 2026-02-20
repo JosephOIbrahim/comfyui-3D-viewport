@@ -97,6 +97,7 @@ from PySide6.QtWidgets import QApplication, QMainWindow
 from animation import CameraAnimator, AnimationMode
 from aov_export import AOVExporter
 from aov_renderer import AOVRenderer
+from bridge_server import BridgeServer
 from camera import OrbitCamera
 from comfy_bridge import ComfyBridge
 from environment import EnvironmentMap
@@ -271,6 +272,10 @@ class StormViewport(QOpenGLWidget):
         self._bridge = ComfyBridge()
         self._aov_exporter = AOVExporter(self._bridge, export_interval=0.5)
 
+        # Viewport bridge server (WS for ComfyUI sidebar panel)
+        self._bridge_server = BridgeServer()
+        self._bridge_server.set_aov_callback(self._save_aovs)
+
         # Drag-and-drop
         FileDropHandler.setup_drop(self)
         self._drop_overlay = FileDropOverlay()
@@ -336,6 +341,9 @@ class StormViewport(QOpenGLWidget):
 
             self._initialized = True
             print("GL initialized: shader program compiled, geometry uploaded.")
+
+            # Start bridge server (non-blocking, runs in Qt event loop)
+            self._bridge_server.start()
         except Exception as e:
             print(f"initializeGL FAILED: {e}")
             import traceback
@@ -592,6 +600,9 @@ class StormViewport(QOpenGLWidget):
             camera_info = self._hud.build_camera_info(self._camera)
             camera_info["shading"] = shading.mode_name
             camera_info["bridge"] = self._bridge.status
+            ws_count = self._bridge_server.client_count
+            if ws_count > 0:
+                camera_info["bridge"] += f" | WS:{ws_count}"
             camera_info["lights"] = self._light_rig.preset_name
             camera_info["environment"] = self._environment.mode
             selected_obj = self._selection.get_selected()
@@ -685,6 +696,17 @@ class StormViewport(QOpenGLWidget):
 
             print(f"AOVs saved: depth_aov.png, normal_aov.png ({self._width}x{self._height})")
 
+            # Broadcast AOV paths to WS panel clients
+            if self._bridge_server.is_running:
+                import os
+                self._bridge_server.broadcast_aov(
+                    {
+                        "depth": os.path.abspath("depth_aov.png"),
+                        "normal": os.path.abspath("normal_aov.png"),
+                    },
+                    (self._width, self._height),
+                )
+
             # Also export to bridge if connected
             if self._bridge.is_connected:
                 results = self._aov_exporter.export_all(self._aov)
@@ -725,10 +747,16 @@ class StormViewport(QOpenGLWidget):
                 print("ComfyUI bridge: ComfyUI not reachable (will retry on next send)")
 
     def _send_camera_to_bridge(self):
-        """Send current camera state to ComfyUI if bridge is active."""
+        """Send current camera state to ComfyUI bridge and WS panel clients."""
+        camera_dict = self._camera.to_load3d_camera()
+
+        # Legacy REST bridge
         if self._bridge.is_connected:
-            camera_dict = self._camera.to_load3d_camera()
             self._bridge.send_viewport_state(camera_dict, self._width, self._height)
+
+        # WS bridge server (broadcasts to panel clients + writes camera_state.json)
+        if self._bridge_server.is_running:
+            self._bridge_server.broadcast_camera(camera_dict)
 
     # ------------------------------------------------------------------
     # Depth verification
@@ -960,6 +988,13 @@ class StormViewport(QOpenGLWidget):
         # Stop animation timer
         if self._anim_timer.isActive():
             self._anim_timer.stop()
+
+        # Stop bridge server
+        if self._bridge_server.is_running:
+            try:
+                self._bridge_server.stop()
+            except Exception:
+                pass
 
         # Disconnect ComfyUI bridge
         if self._bridge.is_connected:

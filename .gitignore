@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.claude/
+*.egg-info/
+dist/
+build/
+camera_state.json
+camera_export.json
+depth_aov.png
+normal_aov.png
