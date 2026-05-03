@@ -5,7 +5,11 @@ __pycache__/
 *.egg-info/
 
 # Review harness run artifacts (constitution + agents under .claude/ ARE committed)
-reports/run_*/
+# We commit only the rendered final_report.md per run, not the raw audit data.
+reports/run_*/pass_*/
+reports/run_*/state.json
+reports/run_*/calls.jsonl
+reports/run_*/findings.jsonl
 .claude/settings.local.json
 dist/
 build/
