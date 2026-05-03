@@ -1,0 +1,10 @@
+# Development & review-harness dependencies (separate from runtime requirements.txt)
+
+# MOE review harness
+claude-agent-sdk>=0.1.70
+anthropic>=0.97.0
+pydantic>=2.0
+pyyaml>=6.0
+
+# Test runner (already used by existing 208 tests)
+pytest>=7.0

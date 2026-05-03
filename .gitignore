@@ -2,8 +2,11 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-.claude/
 *.egg-info/
+
+# Review harness run artifacts (constitution + agents under .claude/ ARE committed)
+reports/run_*/
+.claude/settings.local.json
 dist/
 build/
 camera_state.json
