@@ -27,8 +27,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from claude_agent_sdk import ClaudeAgentOptions, query
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, query
 from claude_agent_sdk import types as sdk_types
+from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
 
 from .budget import Budget, BudgetExceeded, estimate_cost_usd
 from .codebase import CodebaseSnapshot, load_snapshot
@@ -52,9 +53,41 @@ from .state import (
 from .verify import verify_finding
 
 
-PER_CALL_TIMEOUT_SEC = 600
+PER_CALL_TIMEOUT_SEC = 900
 PER_PASS_TIMEOUT_SEC = 3600
 PER_EXPERT_MAX_TURNS = 35
+MAX_PARALLEL_EXPERTS = 4
+
+
+def _make_permission_callback(target_root: Path, write_out_path: Path):
+    """Auto-allow read-only exploration + Write only to a specific JSONL path.
+
+    Used instead of permission_mode='bypassPermissions' because the underlying
+    `--dangerously-skip-permissions` flag is rejected when running as root.
+    """
+    target_root_resolved = target_root.resolve()
+    write_path_resolved = write_out_path.resolve()
+    safe_tools = {"Read", "Grep", "Glob", "Bash"}
+
+    async def can_use_tool(tool_name, tool_input, context):
+        if tool_name in safe_tools:
+            return PermissionResultAllow()
+        if tool_name == "Write":
+            wpath = tool_input.get("file_path")
+            if not wpath:
+                return PermissionResultDeny(message="Write requires file_path")
+            try:
+                wpath_resolved = Path(wpath).resolve()
+            except OSError as exc:
+                return PermissionResultDeny(message=f"bad path: {exc}")
+            if wpath_resolved == write_path_resolved:
+                return PermissionResultAllow()
+            return PermissionResultDeny(
+                message=f"Write only permitted to {write_path_resolved}, got {wpath_resolved}"
+            )
+        return PermissionResultDeny(message=f"tool '{tool_name}' not in expert allowlist")
+
+    return can_use_tool
 
 
 @dataclass
@@ -216,7 +249,7 @@ async def run_expert(
         allowed_tools=expert.allowed_tools + ["Write"],
         max_turns=PER_EXPERT_MAX_TURNS,
         cwd=str(snap.root),
-        permission_mode="bypassPermissions",
+        can_use_tool=_make_permission_callback(snap.root, out_path),
         max_budget_usd=min(budget.remaining(), 5.0),
         setting_sources=[],  # we control prompt entirely; do not load project settings
     )
@@ -231,12 +264,15 @@ async def run_expert(
         return [], record
 
     try:
-        async for msg in query(prompt=user_prompt, options=options):
-            _accumulate_usage(msg, record)
+        async with ClaudeSDKClient(options=options) as client:
+            await client.query(user_prompt)
+            async for msg in client.receive_response():
+                _accumulate_usage(msg, record)
     except Exception as exc:  # noqa: BLE001
         record.error = f"{type(exc).__name__}: {exc}"
         record.duration_ms = int((time.monotonic() - started) * 1000)
         call_log.append(record)
+        print(f"    ERROR: {record.error}")
         return [], record
 
     record.duration_ms = int((time.monotonic() - started) * 1000)
@@ -364,33 +400,43 @@ async def run_pass(
 
     print(f"\n=== Pass {pass_num} | panel={[e.name for e in panel]} | blind={blind} | prior={len(prior)} ===")
 
-    # Run experts. Sequential execution keeps the tool subprocess pool sane and
-    # makes resume easier; parallelism is a future optimization.
+    sem = asyncio.Semaphore(MAX_PARALLEL_EXPERTS)
+
+    async def _one(expert: ExpertDef) -> tuple[ExpertDef, list[Finding] | None, CallRecord | None, str | None]:
+        async with sem:
+            try:
+                findings, record = await asyncio.wait_for(
+                    run_expert(
+                        expert=expert,
+                        pass_num=pass_num,
+                        snap=snap,
+                        prior_findings=prior,
+                        cfg=cfg,
+                        constitution=constitution,
+                        injection_warning=injection_warning,
+                        blind=blind,
+                        pass_dir=pass_dir,
+                        call_log=call_log,
+                        budget=budget,
+                    ),
+                    timeout=PER_CALL_TIMEOUT_SEC,
+                )
+                return expert, findings, record, None
+            except asyncio.TimeoutError:
+                return expert, None, None, "timeout"
+            except BudgetExceeded:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                return expert, None, None, f"{type(exc).__name__}: {exc}"
+
+    print(f"  dispatching {len(panel)} experts (max {MAX_PARALLEL_EXPERTS} concurrent)...")
+    results = await asyncio.gather(*(_one(e) for e in panel))
     pass_findings: list[Finding] = []
-    for expert in panel:
-        print(f"  [{expert.name}] running...")
-        try:
-            findings, record = await asyncio.wait_for(
-                run_expert(
-                    expert=expert,
-                    pass_num=pass_num,
-                    snap=snap,
-                    prior_findings=prior,
-                    cfg=cfg,
-                    constitution=constitution,
-                    injection_warning=injection_warning,
-                    blind=blind,
-                    pass_dir=pass_dir,
-                    call_log=call_log,
-                    budget=budget,
-                ),
-                timeout=PER_CALL_TIMEOUT_SEC,
-            )
-        except asyncio.TimeoutError:
-            print(f"  [{expert.name}] TIMEOUT")
+    for expert, findings, record, err in results:
+        if err is not None:
+            print(f"  [{expert.name}] FAIL: {err}")
             continue
-        except BudgetExceeded:
-            raise
+        assert findings is not None and record is not None
         print(f"  [{expert.name}] {len(findings)} raw findings | ${record.cost_usd:.4f} | "
               f"{record.duration_ms}ms")
         pass_findings.extend(findings)
@@ -508,7 +554,7 @@ async def run_devils_advocate(
         allowed_tools=expert.allowed_tools + ["Write"],
         max_turns=PER_EXPERT_MAX_TURNS,
         cwd=str(snap.root),
-        permission_mode="bypassPermissions",
+        can_use_tool=_make_permission_callback(snap.root, out_path),
         max_budget_usd=min(budget.remaining(), 5.0),
         setting_sources=[],
     )
@@ -519,10 +565,13 @@ async def run_devils_advocate(
         call_log.append(record)
         return
     try:
-        async for msg in query(prompt=user_prompt, options=options):
-            _accumulate_usage(msg, record)
+        async with ClaudeSDKClient(options=options) as client:
+            await client.query(user_prompt)
+            async for msg in client.receive_response():
+                _accumulate_usage(msg, record)
     except Exception as exc:  # noqa: BLE001
         record.error = f"{type(exc).__name__}: {exc}"
+        print(f"    DA ERROR: {record.error}")
     record.duration_ms = int((time.monotonic() - started) * 1000)
     if record.cost_usd <= 0:
         record.cost_usd = estimate_cost_usd(
