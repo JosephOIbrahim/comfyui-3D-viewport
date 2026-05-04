@@ -160,6 +160,26 @@ class TestBridgeLifecycle:
         server.stop()  # should not raise
         assert not server.is_running
 
+    def test_callbacks_are_per_instance(self):
+        """b8fe4469 regression: _preset_callback and _aov_callback must be
+        instance attributes, not class attributes — otherwise setting a
+        callback on one BridgeServer leaks to every other instance."""
+        a = BridgeServer(port=10001)
+        b = BridgeServer(port=10002)
+
+        marker_a = MagicMock(name="preset_a")
+        marker_aov_a = MagicMock(name="aov_a")
+        a.set_preset_callback(marker_a)
+        a.set_aov_callback(marker_aov_a)
+
+        # b must not see a's callbacks.
+        assert b._preset_callback is None, \
+            "second BridgeServer leaked preset callback from first instance"
+        assert b._aov_callback is None, \
+            "second BridgeServer leaked aov callback from first instance"
+        assert a._preset_callback is marker_a
+        assert a._aov_callback is marker_aov_a
+
 
 # ---------------------------------------------------------------------------
 # Tests: Connection management

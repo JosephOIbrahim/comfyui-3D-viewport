@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Callable
 
 from PySide6.QtCore import QTimer
 from PySide6.QtNetwork import QHostAddress
@@ -44,6 +45,11 @@ class BridgeServer:
         self._last_aov_paths: dict = {}
         self._last_broadcast_time: float = 0.0
         self._running = False
+
+        # Per-instance callbacks (must NOT be class attributes — multiple
+        # BridgeServer instances must hold independent callback state).
+        self._preset_callback: Callable[[int], None] | None = None
+        self._aov_callback: Callable[[], None] | None = None
 
         # Throttle timer for camera broadcasts
         self._throttle_timer = QTimer()
@@ -179,14 +185,11 @@ class BridgeServer:
     # Callbacks (set by viewport)
     # ------------------------------------------------------------------
 
-    _preset_callback = None
-    _aov_callback = None
-
-    def set_preset_callback(self, callback) -> None:
+    def set_preset_callback(self, callback: Callable[[int], None]) -> None:
         """Set callback for preset change requests from the panel."""
         self._preset_callback = callback
 
-    def set_aov_callback(self, callback) -> None:
+    def set_aov_callback(self, callback: Callable[[], None]) -> None:
         """Set callback for AOV render requests from the panel."""
         self._aov_callback = callback
 
