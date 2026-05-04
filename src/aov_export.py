@@ -32,9 +32,9 @@ must be called from a thread with an active GL context.
 from __future__ import annotations
 
 import logging
-import struct
 import time
-import zlib
+
+from png_io import encode_png
 
 from OpenGL.GL import (
     GL_FLOAT,
@@ -57,58 +57,10 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _encode_png(pixels: bytes, width: int, height: int, channels: int) -> bytes:
-    """Encode raw pixel data as a PNG image and return the bytes.
-
-    Parameters
-    ----------
-    pixels : bytes
-        Raw pixel data in **top-to-bottom** row order (image convention).
-        For grayscale (channels=1): one byte per pixel.
-        For RGB (channels=3): three bytes per pixel (R, G, B).
-    width, height : int
-        Image dimensions in pixels.
-    channels : int
-        1 for grayscale, 3 for RGB.
-
-    Returns
-    -------
-    bytes
-        Complete PNG file contents.
-    """
-    if channels == 1:
-        color_type = 0  # grayscale
-    elif channels == 3:
-        color_type = 2  # RGB
-    else:
-        raise ValueError(f"Unsupported channel count: {channels}")
-
-    def _chunk(chunk_type: bytes, chunk_data: bytes) -> bytes:
-        body = chunk_type + chunk_data
-        crc = struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
-        return struct.pack(">I", len(chunk_data)) + body + crc
-
-    row_size = width * channels
-
-    # Build raw scanlines with a filter byte (0x00 = None) per row.
-    raw = bytearray()
-    for y in range(height):
-        raw += b"\x00"  # filter byte: None
-        row_start = y * row_size
-        raw += pixels[row_start : row_start + row_size]
-
-    # Assemble the PNG file in memory.
-    out = bytearray()
-    # Signature
-    out += b"\x89PNG\r\n\x1a\n"
-    # IHDR: width, height, bit_depth=8, color_type, compression, filter, interlace
-    ihdr = struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, 0)
-    out += _chunk(b"IHDR", ihdr)
-    # IDAT: zlib-compressed scanlines
-    out += _chunk(b"IDAT", zlib.compress(bytes(raw), 6))
-    # IEND
-    out += _chunk(b"IEND", b"")
-
-    return bytes(out)
+    """Encode raw pixel data as an in-memory PNG. Thin wrapper over
+    :func:`png_io.encode_png`; ``aov_export`` keeps top-to-bottom input
+    convention (no flip)."""
+    return encode_png(pixels, width, height, channels)
 
 
 # ---------------------------------------------------------------------------

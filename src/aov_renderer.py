@@ -33,10 +33,10 @@ The render_callback pattern:
 """
 
 import ctypes
-import struct
-import zlib
 
 import numpy as np
+
+from png_io import write_png
 from OpenGL.GL import (
     GL_ARRAY_BUFFER,
     GL_COLOR_ATTACHMENT0,
@@ -177,59 +177,15 @@ void main() {
 def _write_png(path, data, width, height, channels, bit_depth=8):
     """Write a PNG file using only zlib and struct. No Pillow required.
 
-    Parameters
-    ----------
-    path : str
-        Output file path.
-    data : bytes
-        Raw pixel data, row-major, bottom-to-top (OpenGL convention).
-        The writer flips Y so the saved image is top-to-bottom.
-    width, height : int
-        Image dimensions in pixels.
-    channels : int
-        1 = greyscale, 3 = RGB, 4 = RGBA.
-    bit_depth : int
-        Bits per channel. 8 or 16.
+    Thin wrapper over :func:`png_io.write_png` — kept so external callers
+    inside this module retain their existing call sites. Input is in
+    OpenGL convention (bottom-to-top) and is flipped to top-to-bottom in
+    the output PNG.
     """
-    if channels == 1:
-        color_type = 0   # greyscale
-    elif channels == 3:
-        color_type = 2   # RGB
-    elif channels == 4:
-        color_type = 6   # RGBA
-    else:
-        raise ValueError(f"Unsupported channel count: {channels}")
-
-    if bit_depth not in (8, 16):
-        raise ValueError(f"Unsupported bit depth: {bit_depth}")
-
-    def _chunk(chunk_type, chunk_data):
-        c = chunk_type + chunk_data
-        crc = struct.pack('>I', zlib.crc32(c) & 0xffffffff)
-        return struct.pack('>I', len(chunk_data)) + c + crc
-
-    bytes_per_sample = bit_depth // 8
-    row_size = width * channels * bytes_per_sample
-
-    # Build raw image data with filter byte (0 = no filter) per scanline.
-    # Flip Y: OpenGL reads bottom-up, PNG is top-down.
-    raw = bytearray()
-    for y in range(height):
-        raw += b'\x00'  # filter byte: None
-        row_start = (height - 1 - y) * row_size
-        raw += data[row_start:row_start + row_size]
-
-    with open(path, 'wb') as f:
-        # PNG signature
-        f.write(b'\x89PNG\r\n\x1a\n')
-        # IHDR
-        ihdr = struct.pack('>IIBBBBB', width, height, bit_depth,
-                           color_type, 0, 0, 0)
-        f.write(_chunk(b'IHDR', ihdr))
-        # IDAT
-        f.write(_chunk(b'IDAT', zlib.compress(bytes(raw), 9)))
-        # IEND
-        f.write(_chunk(b'IEND', b''))
+    write_png(
+        path, data, width, height, channels,
+        bit_depth=bit_depth, flip_y=True, compression_level=9,
+    )
 
 
 # ---------------------------------------------------------------------------

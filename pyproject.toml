@@ -48,6 +48,7 @@ py-modules = [
     "lighting",
     "math_utils",
     "mesh_importers",
+    "png_io",
     "projection",
     "selection",
     "shading",
