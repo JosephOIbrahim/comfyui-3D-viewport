@@ -1,17 +1,9 @@
-"""Shared fixtures and sys.path setup for the test suite.
+"""Shared fixtures for the test suite.
 
-src/ has no __init__.py -- modules use bare imports like `from math_utils import ...`.
-We insert src/ at the front of sys.path so pytest can import them the same way.
+The package is installed in editable mode via `pip install -e .` (see
+pyproject.toml `[tool.setuptools] package-dir = "src"` + `py-modules`),
+so bare imports like `from math_utils import ...` resolve naturally.
 """
-
-import sys
-from pathlib import Path
-
-# Insert src/ at front of sys.path so bare imports work
-SRC_DIR = str(Path(__file__).resolve().parent.parent / "src")
-if SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
-
 
 import pytest
 

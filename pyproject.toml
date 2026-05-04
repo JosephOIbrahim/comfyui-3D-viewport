@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "comfyui-3d-viewport"
+version = "0.1.0"
+description = "Standalone OpenGL 3D viewport with a ComfyUI WebSocket bridge."
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "comfyui-3d-viewport contributors" }]
+dependencies = [
+    "usd-core>=25.2",
+    "PySide6>=6.6",
+    "PyOpenGL>=3.1",
+    "numpy>=1.26",
+    "trimesh>=4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "claude-agent-sdk>=0.1.70",
+    "anthropic>=0.97.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+]
+
+# Flat-module src layout. The codebase deliberately uses bare imports
+# (`from camera import OrbitCamera`); declaring py-modules with
+# package-dir = "src" preserves that style after install. Adding an
+# `src/__init__.py` would make `src` a package and force qualified imports
+# which would break ~20 files — out of scope for this packaging fix.
+[tool.setuptools]
+package-dir = { "" = "src" }
+py-modules = [
+    "animation",
+    "aov_export",
+    "aov_renderer",
+    "bridge_server",
+    "camera",
+    "comfy_bridge",
+    "config",
+    "environment",
+    "file_drop",
+    "grid",
+    "hud",
+    "lighting",
+    "math_utils",
+    "mesh_importers",
+    "projection",
+    "selection",
+    "shading",
+    "stage_builder",
+    "usd_loader",
+    "viewport",
+]
