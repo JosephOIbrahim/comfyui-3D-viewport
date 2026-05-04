@@ -260,3 +260,19 @@ class TestBoundaryValidation:
         from math_utils import mat4_transform_point
         x, y, z = mat4_transform_point(translation_3_4_5, 0.0, 0.0, 0.0)
         assert x == 3 and y == 4 and z == 5
+
+    def test_mat4_transform_point_raises_on_zero_w(self):
+        """adc79820 regression: previously returned un-divided homogeneous
+        coords on near-zero w; now raises so callers can detect projection
+        collapse."""
+        from math_utils import mat4_transform_point
+        # Construct a matrix whose last row dots (0,0,0,1) to ~0:
+        # row 3 = [0, 0, 0, 0] gives rw = 0 for any input.
+        zero_w_matrix = [
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 0.0,
+        ]
+        with pytest.raises(ValueError, match="w near zero"):
+            mat4_transform_point(zero_w_matrix, 1.0, 2.0, 3.0)

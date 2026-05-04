@@ -239,9 +239,15 @@ def _unproject(
     vp = _mat4_mul(proj_matrix, view_matrix)
     inv_vp = _mat4_inverse(vp)
 
-    # Near point (NDC z = -1) and far point (NDC z = 1)
-    near_pt = _mat4_transform_point(inv_vp, ndc_x, ndc_y, -1.0)
-    far_pt = _mat4_transform_point(inv_vp, ndc_x, ndc_y, 1.0)
+    # Near point (NDC z = -1) and far point (NDC z = 1).
+    # mat4_transform_point now raises ValueError when the homogeneous w
+    # collapses (degenerate projection); fall back to a deterministic
+    # ray pointing into -Z so the picker stays robust instead of crashing.
+    try:
+        near_pt = _mat4_transform_point(inv_vp, ndc_x, ndc_y, -1.0)
+        far_pt = _mat4_transform_point(inv_vp, ndc_x, ndc_y, 1.0)
+    except ValueError:
+        return (0.0, 0.0, 0.0), (0.0, 0.0, -1.0)
 
     # Direction = far - near, normalised
     dx = far_pt[0] - near_pt[0]

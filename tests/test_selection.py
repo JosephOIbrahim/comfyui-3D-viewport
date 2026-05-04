@@ -160,3 +160,33 @@ class TestSelectionManager:
         mgr.clear()
         assert len(mgr.objects) == 0
         assert mgr.selected_id is None
+
+
+# ---------------------------------------------------------------------------
+# adc79820 regression: _unproject handles projection collapse gracefully
+# ---------------------------------------------------------------------------
+
+class TestUnprojectDegenerateMatrix:
+    """mat4_transform_point now raises ValueError on near-zero w (commit 9).
+    _unproject must catch and return a deterministic fallback ray instead
+    of bubbling the error up to the picker."""
+
+    def test_caller_handles_projection_collapse(self, monkeypatch):
+        from selection import _unproject
+        import selection
+
+        def boom(*_args, **_kwargs):
+            raise ValueError("simulated w-collapse")
+
+        monkeypatch.setattr(selection, "_mat4_transform_point", boom)
+        identity = [
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ]
+        origin, direction = _unproject(
+            50.0, 50.0, 100, 100, identity, identity,
+        )
+        assert origin == (0.0, 0.0, 0.0)
+        assert direction == (0.0, 0.0, -1.0)

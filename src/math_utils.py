@@ -202,6 +202,11 @@ def mat4_transform_point(
     """Transform a point (x, y, z, w=1) by a column-major 4x4 matrix.
 
     Performs perspective division (divide by w) for projection unproject.
+
+    Raises ValueError when ``|w|`` is below 1e-12: returning the un-divided
+    homogeneous coordinates was the previous behavior, but it silently
+    produced a wildly off-scale result and downstream code (ray casting,
+    selection picking) had no way to tell projection had failed.
     """
     _check_mat4(m, "mat4_transform_point.m")
     rx = m[0] * x + m[4] * y + m[8] * z + m[12]
@@ -209,8 +214,11 @@ def mat4_transform_point(
     rz = m[2] * x + m[6] * y + m[10] * z + m[14]
     rw = m[3] * x + m[7] * y + m[11] * z + m[15]
 
-    if abs(rw) < 1e-14:
-        return (rx, ry, rz)
+    if abs(rw) < 1e-12:
+        raise ValueError(
+            f"mat4_transform_point: homogeneous w near zero ({rw!r}); "
+            "projection is degenerate"
+        )
     return (rx / rw, ry / rw, rz / rw)
 
 
