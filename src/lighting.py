@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from collections.abc import Callable
 from typing import Dict, List, Tuple
 
 # Hard ceiling on lights the shader supports.
@@ -182,7 +183,9 @@ def _make_flat() -> List[Light]:
 
 
 # Ordered list of (name, factory).  Insertion order = cycle order.
-_PRESETS: List[Tuple[str, type(lambda: None)]] = [
+LightFactory = Callable[[], List["Light"]]
+
+_PRESETS: List[Tuple[str, LightFactory]] = [
     ("3-Point", _make_3point),
     ("Rim Heavy", _make_rim_heavy),
     ("Top Down", _make_top_down),
@@ -190,7 +193,7 @@ _PRESETS: List[Tuple[str, type(lambda: None)]] = [
 ]
 
 _PRESET_NAMES: List[str] = [name for name, _ in _PRESETS]
-_PRESET_MAP: Dict[str, type(lambda: None)] = dict(_PRESETS)
+_PRESET_MAP: Dict[str, LightFactory] = dict(_PRESETS)
 
 
 # ------------------------------------------------------------------
