@@ -17,6 +17,37 @@ import math
 
 
 # ---------------------------------------------------------------------------
+# Boundary validators
+#
+# math_utils functions are called from multiple sibling modules with
+# user-supplied or computed inputs.  A wrong-shape matrix or NaN entry
+# silently corrupts every downstream draw call without raising; these
+# helpers fail fast at the boundary instead.
+# ---------------------------------------------------------------------------
+
+def _check_mat4(m, name: str = "matrix") -> None:
+    """Raise ValueError unless *m* is a 16-element sequence of finite floats."""
+    if not hasattr(m, "__len__"):
+        raise ValueError(f"{name}: expected a sized sequence, got {type(m).__name__}")
+    if len(m) != 16:
+        raise ValueError(f"{name}: expected 16 elements, got {len(m)}")
+    for i, v in enumerate(m):
+        if not isinstance(v, (int, float)) or v != v or v in (math.inf, -math.inf):
+            raise ValueError(f"{name}[{i}]: non-finite or non-numeric ({v!r})")
+
+
+def _check_vec3(v, name: str = "vector") -> None:
+    """Raise ValueError unless *v* is a 3-element sequence of finite floats."""
+    if not hasattr(v, "__len__"):
+        raise ValueError(f"{name}: expected a sized sequence, got {type(v).__name__}")
+    if len(v) != 3:
+        raise ValueError(f"{name}: expected 3 elements, got {len(v)}")
+    for i, x in enumerate(v):
+        if not isinstance(x, (int, float)) or x != x or x in (math.inf, -math.inf):
+            raise ValueError(f"{name}[{i}]: non-finite or non-numeric ({x!r})")
+
+
+# ---------------------------------------------------------------------------
 # Vector operations
 # ---------------------------------------------------------------------------
 
@@ -44,6 +75,8 @@ def vec3_normalize_tuple(v: tuple[float, float, float]) -> tuple[float, float, f
 
 def mat4_multiply(a: list[float], b: list[float]) -> list[float]:
     """Multiply two column-major 4x4 matrices: result = A * B."""
+    _check_mat4(a, "mat4_multiply.a")
+    _check_mat4(b, "mat4_multiply.b")
     result = [0.0] * 16
     for col in range(4):
         for row in range(4):
@@ -57,8 +90,11 @@ def mat4_multiply(a: list[float], b: list[float]) -> list[float]:
 def mat4_inverse(m: list[float]) -> list[float]:
     """Invert a column-major 4x4 matrix using cofactor expansion.
 
-    Returns the inverse matrix.  Raises ValueError if the matrix is singular.
+    Returns the inverse matrix.  Raises ValueError if the matrix is singular
+    or malformed (wrong length, non-finite entries).
     """
+    _check_mat4(m, "mat4_inverse.m")
+
     def a(r: int, c: int) -> float:
         return m[c * 4 + r]
 
@@ -167,6 +203,7 @@ def mat4_transform_point(
 
     Performs perspective division (divide by w) for projection unproject.
     """
+    _check_mat4(m, "mat4_transform_point.m")
     rx = m[0] * x + m[4] * y + m[8] * z + m[12]
     ry = m[1] * x + m[5] * y + m[9] * z + m[13]
     rz = m[2] * x + m[6] * y + m[10] * z + m[14]

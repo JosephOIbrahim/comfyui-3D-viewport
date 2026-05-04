@@ -195,3 +195,42 @@ class TestComputeVertexNormals:
     def test_empty_input(self):
         normals = compute_vertex_normals([], [])
         assert normals == []
+
+
+# ---------------------------------------------------------------------------
+# Boundary validators (61e3e9f6 regression)
+# ---------------------------------------------------------------------------
+
+class TestBoundaryValidation:
+    """Wrong-shape or NaN inputs must raise ValueError instead of silently
+    producing corrupt math."""
+
+    def test_mat4_multiply_rejects_wrong_length(self, identity_matrix):
+        with pytest.raises(ValueError, match="expected 16 elements"):
+            mat4_multiply([1.0, 0.0, 0.0], identity_matrix)
+
+    def test_mat4_multiply_rejects_nan(self, identity_matrix):
+        bad = list(identity_matrix)
+        bad[5] = float("nan")
+        with pytest.raises(ValueError, match="non-finite"):
+            mat4_multiply(bad, identity_matrix)
+
+    def test_mat4_multiply_rejects_inf(self, identity_matrix):
+        bad = list(identity_matrix)
+        bad[0] = float("inf")
+        with pytest.raises(ValueError, match="non-finite"):
+            mat4_multiply(identity_matrix, bad)
+
+    def test_mat4_inverse_rejects_wrong_length(self):
+        with pytest.raises(ValueError, match="expected 16 elements"):
+            mat4_inverse([0.0] * 9)
+
+    def test_mat4_transform_point_rejects_wrong_length(self):
+        with pytest.raises(ValueError, match="expected 16 elements"):
+            from math_utils import mat4_transform_point
+            mat4_transform_point([0.0] * 4, 0.0, 0.0, 0.0)
+
+    def test_mat4_transform_point_accepts_valid(self, translation_3_4_5):
+        from math_utils import mat4_transform_point
+        x, y, z = mat4_transform_point(translation_3_4_5, 0.0, 0.0, 0.0)
+        assert x == 3 and y == 4 and z == 5
