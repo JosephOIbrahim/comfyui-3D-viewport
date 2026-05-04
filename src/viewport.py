@@ -90,10 +90,14 @@ from OpenGL.GL import (
     GL_ARRAY_BUFFER,
     GL_COMPILE_STATUS,
     GL_ELEMENT_ARRAY_BUFFER,
+    GL_LINK_STATUS,
     GL_READ_FRAMEBUFFER,
     GL_STATIC_DRAW,
     GL_UNSIGNED_INT,
     glBindFramebuffer,
+    glDeleteProgram,
+    glGetProgramInfoLog,
+    glGetProgramiv,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPainter, QSurfaceFormat
@@ -206,19 +210,28 @@ def compile_shader(source: str, shader_type: int) -> int:
     glCompileShader(shader)
     if not glGetShaderiv(shader, GL_COMPILE_STATUS):
         info = glGetShaderInfoLog(shader).decode()
+        glDeleteShader(shader)  # do not leak the handle on failure
         raise RuntimeError(f"Shader compile error: {info}")
     return shader
 
 
 def create_shader_program(vert_src: str, frag_src: str) -> int:
     vs = compile_shader(vert_src, GL_VERTEX_SHADER)
-    fs = compile_shader(frag_src, GL_FRAGMENT_SHADER)
+    try:
+        fs = compile_shader(frag_src, GL_FRAGMENT_SHADER)
+    except Exception:
+        glDeleteShader(vs)  # vs already compiled; do not leak if fs fails
+        raise
     program = glCreateProgram()
     glAttachShader(program, vs)
     glAttachShader(program, fs)
     glLinkProgram(program)
     glDeleteShader(vs)
     glDeleteShader(fs)
+    if not glGetProgramiv(program, GL_LINK_STATUS):
+        info = glGetProgramInfoLog(program).decode()
+        glDeleteProgram(program)
+        raise RuntimeError(f"Shader link error: {info}")
     return program
 
 
