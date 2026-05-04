@@ -185,7 +185,8 @@ def _trimesh_to_meshdata(
     # -- Normals ----------------------------------------------------------
     try:
         # trimesh computes vertex normals on demand; this may fail on
-        # degenerate geometry.
+        # degenerate geometry. Only swallow predictable parsing errors;
+        # let MemoryError, KeyboardInterrupt, etc. propagate.
         raw_normals = mesh.vertex_normals
         if raw_normals is not None and len(raw_normals) == len(vertices):
             normals = [
@@ -193,7 +194,7 @@ def _trimesh_to_meshdata(
             ]
         else:
             normals = _compute_vertex_normals(vertices, indices)
-    except Exception:
+    except (ValueError, AttributeError, IndexError, TypeError):
         normals = _compute_vertex_normals(vertices, indices)
 
     # -- Color ------------------------------------------------------------
@@ -229,7 +230,7 @@ def _extract_color(mesh: trimesh.Trimesh) -> tuple:
                 # vertex_colors is Nx4 uint8 (RGBA). Average and normalise.
                 avg = np.mean(vc[:, :3].astype(float), axis=0) / 255.0
                 return (float(avg[0]), float(avg[1]), float(avg[2]))
-        except Exception:
+        except (ValueError, AttributeError, IndexError, TypeError):
             pass
 
     # 2. Material color
@@ -256,7 +257,7 @@ def _extract_color(mesh: trimesh.Trimesh) -> tuple:
                                 float(np.clip(arr[1], 0.0, 1.0)),
                                 float(np.clip(arr[2], 0.0, 1.0)),
                             )
-        except Exception:
+        except (ValueError, AttributeError, IndexError, TypeError):
             pass
 
     return _DEFAULT_COLOR

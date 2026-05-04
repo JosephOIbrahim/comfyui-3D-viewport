@@ -105,6 +105,33 @@ class TestExtractColor:
         r, g, b = _extract_color(mesh)
         assert r == pytest.approx(0.5, rel=1e-2)
 
+    def test_vertex_colors_value_error_falls_through_to_material(self):
+        """5b7d2a7a regression: ValueError on vertex_colors numpy ops should
+        be swallowed and fall through to the material attempt."""
+        mesh = MagicMock()
+        mesh.visual.kind = "vertex"
+        # PropertyMock-style: accessing vertex_colors raises a parsing error
+        type(mesh.visual).vertex_colors = PropertyMock(
+            side_effect=ValueError("malformed vertex_colors array")
+        )
+        # Material fallback succeeds.
+        mesh.visual.material.baseColorFactor = np.array([0.1, 0.2, 0.3, 1.0])
+        mesh.visual.material.diffuse = None
+        mesh.visual.material.main_color = None
+        r, _g, _b = _extract_color(mesh)
+        assert r == pytest.approx(0.1, rel=1e-2)
+
+    def test_vertex_colors_unexpected_error_propagates(self):
+        """5b7d2a7a regression: unexpected exception types must NOT be
+        swallowed by the narrowed except clause."""
+        mesh = MagicMock()
+        mesh.visual.kind = "vertex"
+        type(mesh.visual).vertex_colors = PropertyMock(
+            side_effect=MemoryError("simulated OOM during color extraction")
+        )
+        with pytest.raises(MemoryError):
+            _extract_color(mesh)
+
 
 # ---------------------------------------------------------------------------
 # _mesh_name
