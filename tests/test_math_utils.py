@@ -171,6 +171,32 @@ class TestLookAt:
         # a negative translation along the forward axis.
         assert m[14] == pytest.approx(-5.0, rel=1e-4)
 
+    def test_eye_equals_target_returns_finite_matrix(self):
+        """3a28675c regression: eye == target previously produced NaN."""
+        m = look_at((1.0, 2.0, 3.0), (1.0, 2.0, 3.0), (0.0, 1.0, 0.0))
+        assert all(math.isfinite(v) for v in m), \
+            "look_at must produce a finite matrix even when eye == target"
+
+    def test_up_parallel_to_forward_returns_finite_matrix(self):
+        """3a28675c regression: forward parallel to up previously produced
+        a zero rotation block. Looking straight up the +Y axis with up = +Y."""
+        m = look_at((0.0, 0.0, 0.0), (0.0, 5.0, 0.0), (0.0, 1.0, 0.0))
+        assert all(math.isfinite(v) for v in m)
+        # Side vector (matrix col 0 rows 0..2 = m[0], m[4], m[8] in
+        # column-major) must be unit-ish, not zero.
+        side_len = math.sqrt(m[0] ** 2 + m[4] ** 2 + m[8] ** 2)
+        assert side_len > 0.5, \
+            "side vector collapsed; cross(f, up) fallback failed"
+
+    def test_up_antiparallel_to_forward_returns_finite_matrix(self):
+        """Forward = -up should also get a fallback up axis."""
+        m = look_at((0.0, 5.0, 0.0), (0.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+        assert all(math.isfinite(v) for v in m)
+
+    def test_rejects_non_finite_eye(self):
+        with pytest.raises(ValueError):
+            look_at((float("nan"), 0.0, 0.0), (0, 0, 0), (0, 1, 0))
+
 
 # ---------------------------------------------------------------------------
 # compute_vertex_normals

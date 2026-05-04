@@ -214,20 +214,55 @@ def mat4_transform_point(
     return (rx / rw, ry / rw, rz / rw)
 
 
-def look_at(eye: tuple, target: tuple, up: tuple) -> list[float]:
-    """Build a look-at view matrix (column-major for GL)."""
-    def sub(a, b):
-        return (a[0]-b[0], a[1]-b[1], a[2]-b[2])
-    def normalize(v):
-        l = math.sqrt(v[0]**2 + v[1]**2 + v[2]**2)
-        return (v[0]/l, v[1]/l, v[2]/l) if l > 0 else v
-    def cross(a, b):
-        return (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0])
-    def dot(a, b):
-        return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]
+_LOOK_AT_EPS = 1e-8
 
-    f = normalize(sub(target, eye))
-    s = normalize(cross(f, up))
+
+def look_at(eye: tuple, target: tuple, up: tuple) -> list[float]:
+    """Build a look-at view matrix (column-major for GL).
+
+    Robust against degenerate inputs: if ``eye == target`` we default
+    forward to (0, 0, -1); if ``forward`` is parallel to ``up`` we
+    fall back to a perpendicular up axis so ``cross(forward, up)`` is
+    non-zero.  The returned matrix is always finite.
+    """
+    _check_vec3(eye, "look_at.eye")
+    _check_vec3(target, "look_at.target")
+    _check_vec3(up, "look_at.up")
+
+    def sub(a, b):
+        return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+    def length(v):
+        return math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+
+    def normalize(v, fallback):
+        l = length(v)
+        if l < _LOOK_AT_EPS:
+            return fallback
+        return (v[0] / l, v[1] / l, v[2] / l)
+
+    def cross(a, b):
+        return (
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        )
+
+    def dot(a, b):
+        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+    # Forward: target - eye. Zero-length when eye == target → default to -Z.
+    f = normalize(sub(target, eye), fallback=(0.0, 0.0, -1.0))
+
+    # Side: cross(f, up). Zero-length when f is parallel to up. Pick an
+    # up axis that's perpendicular to f as a fallback.
+    s_raw = cross(f, up)
+    if length(s_raw) < _LOOK_AT_EPS:
+        # Choose a fallback up axis that is not parallel to f.
+        alt_up = (0.0, 0.0, 1.0) if abs(f[1]) > 0.9 else (0.0, 1.0, 0.0)
+        s_raw = cross(f, alt_up)
+    s = normalize(s_raw, fallback=(1.0, 0.0, 0.0))
+
     u = cross(s, f)
 
     return [
