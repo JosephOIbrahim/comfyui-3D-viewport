@@ -24,7 +24,7 @@ Usage:
     python src/viewport.py path/to/model.usd  # Load USD file
     python src/viewport.py path/to/model.glb  # Load GLB file
 
-Requires Python 3.12 venv with: usd-core, PySide6, PyOpenGL, numpy, trimesh
+Requires Python >=3.10 venv with: usd-core, PySide6, PyOpenGL, numpy, trimesh
     .venv/Scripts/python src/viewport.py
 """
 
@@ -33,6 +33,12 @@ import json
 import os
 import sys
 import time
+
+if sys.version_info < (3, 10):  # PEP 604 union types used throughout
+    raise RuntimeError(
+        f"comfyui-3d-viewport requires Python >=3.10, got "
+        f"{sys.version_info.major}.{sys.version_info.minor}"
+    )
 
 import numpy as np
 
