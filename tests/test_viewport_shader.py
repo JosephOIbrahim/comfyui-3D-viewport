@@ -63,6 +63,16 @@ _install_getattr(_opengl_gl)
 _install_getattr(_opengl)
 
 
+# --- pxr / USD mock (this environment has usd-core but not UsdLux) ----------
+
+_pxr = _ensure_module("pxr")
+for sub in ("Gf", "Sdf", "Usd", "UsdGeom", "UsdLux"):
+    _ensure_module(f"pxr.{sub}")
+    setattr(_pxr, sub, sys.modules[f"pxr.{sub}"])
+    _install_getattr(sys.modules[f"pxr.{sub}"])
+_install_getattr(_pxr)
+
+
 # --- viewport.py is heavy at import time; isolate the helpers ---------------
 
 # We rely on the production module being importable end-to-end with the mocks
