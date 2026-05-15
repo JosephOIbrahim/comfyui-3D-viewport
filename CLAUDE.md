@@ -14,43 +14,51 @@ This is **not** a standalone project. It extends the parent codebase at `C:\User
 
 The master plan lives in `SUPERDUPER_UI_PLAN_v2.md` (parent). This repo's scope is defined by `SUPERDUPER_3D_GRAFT.md` — five grafts (A through E) that slot into existing phases.
 
-## Parent Project: comfyui-agent
+## Parent Project: Comfy-Cozy (the "comfyui-agent" co-pilot)
 
-**Path:** `C:\Users\User\comfyui-agent\`
+**Path:** `G:\Comfy-Cozy\` (the brain lives under `G:\Comfy-Cozy\agent\`).
+The older path `C:\Users\User\comfyui-agent\` is no longer valid — that tree has moved to G:.
 **Always edit source there, never installed copies.**
 
 ### Key Files to Modify
 
 | Graft | Target File(s) | What Changes |
 |-------|----------------|--------------|
-| A: 3D Data Types | `agent/tools/workflow_parse.py`, `agent/knowledge/comfyui_core.md` | Add MESH/VOXEL/POINT_CLOUD/CAMERA/POSE type mappings |
-| B: Partner Nodes | `agent/tools/comfy_discover.py`, `agent/knowledge/` | Add `source_tier` field, partner node registry |
+| A: 3D Data Types | `agent/tools/comfy_inspect.py` (workflow parsing), `agent/knowledge/comfyui_core.md` | Add MESH/VOXEL/POINT_CLOUD/CAMERA/POSE type mappings |
+| B: Partner Nodes | `agent/tools/comfy_discover.py`, `agent/knowledge/3d_partner_nodes.md` | Add `source_tier` field, partner node registry |
 | C: Splat-to-Mesh | `agent/knowledge/3d_workflows.md` | Conversion path documentation and trigger phrases |
-| D: Viewport Tools | `agent/knowledge/` | VNCCS, Action Director, 3DView knowledge entries |
+| D: Viewport Tools | `agent/knowledge/3d_camera_pipeline.md` (and friends) | VNCCS, Action Director, 3DView knowledge entries |
 | E: Demo Scenarios | Phase 5 test plan (not code) | Splat-to-mesh, ControlNet 3D, Partner Node comparison demos |
 
-### Architecture Quick Reference
+### Architecture Quick Reference (G:\Comfy-Cozy\agent\)
 
 ```
 agent/
-  tools/           # 44 tools across 4 intelligence layers
-    workflow_parse.py    # UNDERSTAND: format detection, connection tracing, summaries
+  tools/           # 100+ MCP tools across UNDERSTAND/DISCOVER/PILOT/VERIFY
+    comfy_inspect.py     # UNDERSTAND: format detection, connection tracing, summaries
     comfy_discover.py    # DISCOVER: unified search (Manager registry + CivitAI + HuggingFace)
     workflow_patch.py    # PILOT: RFC6902 patching, semantic node ops, undo stack
     comfy_execute.py     # VERIFY: queue, execute, poll via WebSocket
-    model_compat.py      # Model family matrix (already has hunyuan3d + wan entries)
+    model_compat.py      # Model family matrix (hunyuan3d + wan entries)
     comfy_api.py         # Live ComfyUI HTTP API queries
-  brain/           # 21 higher-order tools (vision, planner, memory, optimizer)
-  knowledge/       # Trigger-loaded domain files
-    comfyui_core.md      # Always loaded. Type system: IMAGE, LATENT, MODEL, CLIP, VAE, etc.
-    3d_workflows.md      # Loaded on "3d", "mesh", "gaussian", "hunyuan3d" triggers
+  brain/           # Higher-order tools (vision, planner, memory, optimizer, iterative_refine)
+  knowledge/       # Trigger-loaded domain files (~52 KB total, ~13K tokens)
+    comfyui_core.md          # Always loaded. Type system: IMAGE, LATENT, MODEL, CLIP, VAE, ...
+    3d_workflows.md          # Loaded on "3d", "mesh", "gaussian", "hunyuan3d" triggers
+    3d_camera_pipeline.md    # 3D camera / viewport bridge knowledge
+    3d_partner_nodes.md      # Partner Node registry (Hunyuan / Tripo / Meshy / Rodin)
     controlnet_patterns.md
     flux_specifics.md
     common_recipes.md
-  system_prompt.py       # Builds context; _KNOWLEDGE_TRIGGERS dict controls file loading
+    triggers.yaml            # Keyword → knowledge file mapping (loaded by system_prompt.py)
+  llm/             # Multi-provider abstraction (anthropic, openai, gemini, ollama)
+    _anthropic.py   # Anthropic provider; prompt caching + ThinkingBlock signatures
+    _base.py        # LLMProvider ABC
+    _types.py       # TextBlock / ToolUseBlock / ToolResultBlock / ThinkingBlock / ImageBlock
+  system_prompt.py       # Builds context; keyword + TF-IDF triggers; cached prefix
   workflow_session.py    # Thread-safe session state (base_workflow, current, history, format)
   mcp_server.py          # MCP stdio transport (primary interface)
-  config.py              # Paths, ComfyUI base URL
+  config.py              # Paths, ComfyUI base URL, AGENT_MODEL / model tiering
 ```
 
 ### Existing 3D Support (already in comfyui-agent)
